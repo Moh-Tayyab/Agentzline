@@ -68,9 +68,21 @@ class Settings(BaseSettings):
     INTRADAY_BLEED_CTR_THRESHOLD: float = 0.6  # ... with zero conversions and CTR below this %
     INTRADAY_SUPPRESSION_HOURS: int = 24  # Max 1 pacing alert per campaign per window
 
+    # ── Security & CORS ──────────────────────────────────────────────────
+    CORS_ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:8000,http://127.0.0.1:3000"
+
     # ── Phase-3 Silver Tier HITL Action Tokens ──────────────────────────────
     ACTION_TOKEN_SECRET: str = ""  # If empty, falls back to FERNET_ENCRYPTION_KEY / META_APP_SECRET
     ACTION_TOKEN_EXPIRY_MINUTES: int = 15  # TTL for interactive WhatsApp buttons
+
+    # ── Phase-4 Gold Tier Courier Webhook Security ──────────────────────────
+    COURIER_WEBHOOK_SECRET: str = ""  # Shared secret token for PostEx/Trax/Leopards/Swyft webhooks
+
+    def get_cors_origins(self) -> list[str]:
+        """Parse comma-separated allowed origins."""
+        if not self.CORS_ALLOWED_ORIGINS:
+            return ["http://localhost:3000", "http://localhost:8000"]
+        return [o.strip() for o in self.CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
 
 
 @lru_cache

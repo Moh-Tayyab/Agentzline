@@ -6,7 +6,7 @@ Ingests real-time order delivery status updates from Pakistani couriers
 """
 
 from typing import Any
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, HTTPException, Request, status
 from loguru import logger
 from sqlalchemy import or_, select
 
@@ -14,6 +14,8 @@ from app.core.database import async_session_maker
 from app.models.audit_log import AuditLog
 from app.models.order import CourierEvent, Order
 from app.schemas.order import CourierWebhookResponse
+import hmac
+from app.core.config import get_settings
 from app.skills.courier_normalizer import (
     parse_leopards_webhook_payload,
     parse_postex_webhook_payload,
@@ -22,6 +24,46 @@ from app.skills.courier_normalizer import (
 )
 
 router = APIRouter()
+
+
+def verify_courier_webhook_secret(request: Request) -> None:
+    """
+    Verify incoming webhook request contains valid shared secret.
+    If COURIER_WEBHOOK_SECRET is set, enforces 401 Unauthorized on mismatch.
+    Checks:
+    1. Headers: X-Webhook-Secret, X-Api-Key
+    2. Authorization: Bearer <secret>
+    3. Query parameter: ?secret= or ?token=
+    """
+    settings = get_settings()
+    configured_secret = settings.COURIER_WEBHOOK_SECRET
+    if not configured_secret:
+        return
+
+    incoming_secret = (
+        request.headers.get("X-Webhook-Secret")
+        or request.headers.get("X-Api-Key")
+        or request.headers.get("x-webhook-secret")
+        or request.headers.get("x-api-key")
+    )
+    if incoming_secret and hmac.compare_digest(incoming_secret, configured_secret):
+        return
+
+    auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+        if hmac.compare_digest(token, configured_secret):
+            return
+
+    query_secret = request.query_params.get("secret") or request.query_params.get("token")
+    if query_secret and hmac.compare_digest(query_secret, configured_secret):
+        return
+
+    logger.warning("🚨 Unauthorized courier webhook attempt rejected — invalid or missing secret")
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or missing courier webhook secret",
+    )
 
 
 async def _process_courier_lifecycle(
@@ -129,6 +171,7 @@ async def _process_courier_lifecycle(
 @router.post("/webhook/postex", response_model=CourierWebhookResponse, status_code=status.HTTP_200_OK)
 async def handle_postex_webhook(request: Request) -> CourierWebhookResponse:
     """PostEx courier status webhook."""
+    verify_courier_webhook_secret(request)
     try:
         payload = await request.json()
     except Exception as exc:
@@ -141,6 +184,7 @@ async def handle_postex_webhook(request: Request) -> CourierWebhookResponse:
 @router.post("/webhook/trax", response_model=CourierWebhookResponse, status_code=status.HTTP_200_OK)
 async def handle_trax_webhook(request: Request) -> CourierWebhookResponse:
     """Trax Logistics status webhook."""
+    verify_courier_webhook_secret(request)
     try:
         payload = await request.json()
     except Exception as exc:
@@ -153,6 +197,7 @@ async def handle_trax_webhook(request: Request) -> CourierWebhookResponse:
 @router.post("/webhook/leopards", response_model=CourierWebhookResponse, status_code=status.HTTP_200_OK)
 async def handle_leopards_webhook(request: Request) -> CourierWebhookResponse:
     """Leopards Courier status webhook."""
+    verify_courier_webhook_secret(request)
     try:
         payload = await request.json()
     except Exception as exc:
@@ -165,6 +210,7 @@ async def handle_leopards_webhook(request: Request) -> CourierWebhookResponse:
 @router.post("/webhook/swyft", response_model=CourierWebhookResponse, status_code=status.HTTP_200_OK)
 async def handle_swyft_webhook(request: Request) -> CourierWebhookResponse:
     """Swyft Logistics status webhook."""
+    verify_courier_webhook_secret(request)
     try:
         payload = await request.json()
     except Exception as exc:
@@ -172,3 +218,4 @@ async def handle_swyft_webhook(request: Request) -> CourierWebhookResponse:
         return CourierWebhookResponse(status="invalid_payload", courier="SWYFT")
     parsed = parse_swyft_webhook_payload(payload)
     return await _process_courier_lifecycle("SWYFT", parsed, payload)
+

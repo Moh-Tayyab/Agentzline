@@ -52,12 +52,12 @@ def create_application() -> FastAPI:
         redoc_url="/redoc" if settings.DEBUG else None,
     )
 
-    # CORS middleware for future web dashboard
+    # CORS middleware with strict allowed origins
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Tighten in production
+        allow_origins=settings.get_cors_origins(),
         allow_credentials=True,
-        allow_methods=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         allow_headers=["*"],
     )
 

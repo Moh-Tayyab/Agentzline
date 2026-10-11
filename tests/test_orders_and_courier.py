@@ -479,3 +479,70 @@ def test_bilingual_daily_report_with_cod_summary():
     assert "Real Net Profit & COD Reconciliation" in en
     assert "Delivered Cash" in en
     assert "76,000 PKR" in en
+
+
+@pytest.mark.asyncio
+class TestCourierWebhookAuthentication:
+    """Verify security guardrails on courier endpoints with shared secret."""
+
+    async def test_webhook_unauthorized_when_secret_set_and_missing_in_request(self, monkeypatch):
+        from app.core.config import get_settings
+
+        settings = get_settings()
+        monkeypatch.setattr(settings, "COURIER_WEBHOOK_SECRET", "test_vault_secret_999")
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            res = await client.post(
+                "/api/v1/courier/webhook/postex",
+                json={"trackingNumber": "T-1", "transactionStatus": "Delivered"},
+            )
+            assert res.status_code == 401
+            assert "Invalid or missing courier webhook secret" in res.json()["detail"]
+
+    async def test_webhook_unauthorized_on_wrong_secret(self, monkeypatch):
+        from app.core.config import get_settings
+
+        settings = get_settings()
+        monkeypatch.setattr(settings, "COURIER_WEBHOOK_SECRET", "test_vault_secret_999")
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            res = await client.post(
+                "/api/v1/courier/webhook/postex",
+                headers={"X-Webhook-Secret": "wrong_value"},
+                json={"trackingNumber": "T-1", "transactionStatus": "Delivered"},
+            )
+            assert res.status_code == 401
+
+    async def test_webhook_authorized_via_header_or_bearer_or_query(self, monkeypatch):
+        from app.core.config import get_settings
+
+        settings = get_settings()
+        monkeypatch.setattr(settings, "COURIER_WEBHOOK_SECRET", "test_vault_secret_999")
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # 1. Via X-Webhook-Secret
+            res1 = await client.post(
+                "/api/v1/courier/webhook/postex",
+                headers={"X-Webhook-Secret": "test_vault_secret_999"},
+                json={"trackingNumber": "UNKNOWN-99", "transactionStatus": "Delivered"},
+            )
+            assert res1.status_code == 200
+
+            # 2. Via Authorization: Bearer
+            res2 = await client.post(
+                "/api/v1/courier/webhook/trax",
+                headers={"Authorization": "Bearer test_vault_secret_999"},
+                json={"tracking_number": "UNKNOWN-99", "status": "Delivered"},
+            )
+            assert res2.status_code == 200
+
+            # 3. Via Query param ?secret=
+            res3 = await client.post(
+                "/api/v1/courier/webhook/leopards?secret=test_vault_secret_999",
+                json={"track_id": "UNKNOWN-99", "status": "Delivered"},
+            )
+            assert res3.status_code == 200
+
