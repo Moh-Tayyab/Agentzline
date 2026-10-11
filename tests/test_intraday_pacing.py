@@ -143,9 +143,11 @@ async def test_pacing_job_sends_alert(pacing_tenant):
         totals = await run_intraday_pacing_job()
 
     assert totals["alerts"] >= 1
-    wa_inst.send_text_message.assert_awaited()
-    body = wa_inst.send_text_message.await_args.kwargs["message_text"]
-    assert "Bleed Campaign" in body
+    wa_inst.send_interactive_buttons.assert_awaited()
+    kwargs = wa_inst.send_interactive_buttons.await_args.kwargs
+    assert "Bleed Campaign" in kwargs["body_text"]
+    assert kwargs["button_approve_id"].startswith("v1.PAUSE.")
+    assert kwargs["button_reject_id"].startswith("v1.DISMISS.")
 
     async with async_session_maker() as session:
         from sqlalchemy import select
@@ -185,3 +187,29 @@ async def test_pacing_job_suppresses_duplicate_within_24h(pacing_tenant):
     assert totals["alerts"] == 0
     assert totals["skipped_suppressed"] >= 1
     wa_inst.send_text_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_budget_cache_avoids_repeated_meta_api_calls(pacing_tenant):
+    """Budget cache must serve second sweep without calling get_campaign_details."""
+    from app.skills.intraday_pacing import clear_budget_cache
+
+    clear_budget_cache()
+
+    with patch("app.agents.scheduler.MetaGraphClient") as mock_meta, \
+         patch("app.agents.scheduler.WhatsAppClient") as mock_wa:
+        meta_inst = AsyncMock()
+        meta_inst.get_account_insights.return_value = [_raw_insight_bleed()]
+        meta_inst.get_campaign_details.return_value = {"daily_budget": "1000000"}
+        mock_meta.return_value = meta_inst
+        wa_inst = AsyncMock()
+        mock_wa.return_value = wa_inst
+
+        # First sweep: populates cache
+        await run_intraday_pacing_job()
+        assert meta_inst.get_campaign_details.await_count == 1
+
+        # Second sweep: should read from cache and NOT call get_campaign_details again
+        meta_inst.get_campaign_details.reset_mock()
+        await run_intraday_pacing_job()
+        assert meta_inst.get_campaign_details.await_count == 0

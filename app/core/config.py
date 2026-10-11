@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     INTRADAY_BLEED_CTR_THRESHOLD: float = 0.6  # ... with zero conversions and CTR below this %
     INTRADAY_SUPPRESSION_HOURS: int = 24  # Max 1 pacing alert per campaign per window
 
+    # ── Phase-3 Silver Tier HITL Action Tokens ──────────────────────────────
+    ACTION_TOKEN_SECRET: str = ""  # If empty, falls back to FERNET_ENCRYPTION_KEY / META_APP_SECRET
+    ACTION_TOKEN_EXPIRY_MINUTES: int = 15  # TTL for interactive WhatsApp buttons
+
 
 @lru_cache
 def get_settings() -> Settings:

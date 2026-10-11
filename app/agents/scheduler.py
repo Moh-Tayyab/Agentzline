@@ -29,8 +29,11 @@ from app.skills.meta_normalizer import normalize_campaign_insight
 from app.skills.intraday_pacing import (
     detect_intraday_pacing_alerts,
     format_pacing_alert,
+    get_cached_budget,
     parse_meta_budget_to_pkr,
+    set_cached_budget,
 )
+from app.skills.hitl_action_tokens import generate_action_token
 
 scheduler = AsyncIOScheduler()
 
@@ -394,20 +397,30 @@ async def _process_tenant_pacing(
                 if n.get("id"):
                     campaign_ids.add(str(n["id"]))
 
-            # Resolve daily budgets (best-effort per campaign; skip unknown)
+            # Resolve daily budgets (cached to avoid redundant Meta API calls across sweeps)
             budgets: dict[str, Decimal] = {}
-            budget_client = MetaGraphClient(access_token=meta_token)
-            try:
-                for cid in campaign_ids:
-                    try:
-                        details = await budget_client.get_campaign_details(campaign_id=cid)
-                        parsed = parse_meta_budget_to_pkr(details.get("daily_budget"))
-                        if parsed is not None and parsed > Decimal("0"):
-                            budgets[cid] = parsed
-                    except MetaAPIError as err:
-                        logger.warning(f"Budget lookup failed for campaign {cid}: {err}")
-            finally:
-                await budget_client.close()
+            missing_cids: list[str] = []
+            for cid in campaign_ids:
+                cached_b = get_cached_budget(cid)
+                if cached_b is not None:
+                    budgets[cid] = cached_b
+                else:
+                    missing_cids.append(cid)
+
+            if missing_cids:
+                budget_client = MetaGraphClient(access_token=meta_token)
+                try:
+                    for cid in missing_cids:
+                        try:
+                            details = await budget_client.get_campaign_details(campaign_id=cid)
+                            parsed = parse_meta_budget_to_pkr(details.get("daily_budget"))
+                            if parsed is not None and parsed > Decimal("0"):
+                                budgets[cid] = parsed
+                                set_cached_budget(cid, parsed)
+                        except MetaAPIError as err:
+                            logger.warning(f"Budget lookup failed for campaign {cid}: {err}")
+                finally:
+                    await budget_client.close()
 
             alerts = detect_intraday_pacing_alerts(
                 metrics=normalized,
@@ -434,10 +447,36 @@ async def _process_tenant_pacing(
                         continue
                     message = format_pacing_alert(alert, language=language)
                     try:
-                        await wa_client.send_text_message(
-                            recipient_number=full_tenant.whatsapp_notification_number,
-                            message_text=message,
+                        token_pause = generate_action_token(
+                            tenant_id=str(full_tenant.id),
+                            campaign_id=cid,
+                            action="PAUSE",
                         )
+                        token_dismiss = generate_action_token(
+                            tenant_id=str(full_tenant.id),
+                            campaign_id=cid,
+                            action="DISMISS",
+                        )
+                        header_txt = "🚨 Intraday Bleed Alert" if language == "english" else "🚨 Pacing Bleed Alert"
+                        btn_pause_lbl = "🔴 Pause Ad" if language == "english" else "🔴 Pause Karein"
+                        btn_dismiss_lbl = "Keep Running" if language == "english" else "Chalta Rehne Dein"
+
+                        try:
+                            await wa_client.send_interactive_buttons(
+                                recipient_number=full_tenant.whatsapp_notification_number,
+                                header_text=header_txt,
+                                body_text=message,
+                                button_approve_id=token_pause,
+                                button_reject_id=token_dismiss,
+                                button_approve_label=btn_pause_lbl,
+                                button_reject_label=btn_dismiss_lbl,
+                            )
+                        except Exception as send_err:
+                            logger.warning(f"Interactive button send failed, falling back to text: {send_err}")
+                            await wa_client.send_text_message(
+                                recipient_number=full_tenant.whatsapp_notification_number,
+                                message_text=message,
+                            )
                         session.add(AuditLog(
                             tenant_id=full_tenant.id,
                             action_type="INTRADAY_PACING_ALERT",

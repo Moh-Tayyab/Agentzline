@@ -15,10 +15,35 @@ Campaigns without a known daily budget are skipped (no alert) to
 eliminate false positives.
 """
 
+import time
 from decimal import Decimal
 from typing import Any
 
 from loguru import logger
+
+_BUDGET_CACHE: dict[str, tuple[Decimal, float]] = {}
+
+
+def get_cached_budget(campaign_id: str) -> Decimal | None:
+    """Retrieve cached daily budget for a campaign if not expired."""
+    entry = _BUDGET_CACHE.get(str(campaign_id))
+    if not entry:
+        return None
+    val, expires_at = entry
+    if time.time() > expires_at:
+        _BUDGET_CACHE.pop(str(campaign_id), None)
+        return None
+    return val
+
+
+def set_cached_budget(campaign_id: str, budget: Decimal, ttl_seconds: float = 43200.0) -> None:
+    """Cache daily budget with TTL (default 12 hours)."""
+    _BUDGET_CACHE[str(campaign_id)] = (budget, time.time() + ttl_seconds)
+
+
+def clear_budget_cache() -> None:
+    """Clear all cached campaign budgets."""
+    _BUDGET_CACHE.clear()
 
 
 def parse_meta_budget_to_pkr(raw_budget: Any) -> Decimal | None:

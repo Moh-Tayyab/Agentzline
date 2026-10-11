@@ -195,3 +195,18 @@ class MetaGraphClient:
         }
         data = await self._execute_with_retry("GET", f"/{bid}/owned_ad_accounts", params)
         return data.get("data", [])
+
+    async def update_campaign_status(self, campaign_id: str, status: str) -> dict[str, Any]:
+        """
+        Update campaign status on Meta Marketing API (e.g. 'PAUSED' or 'ACTIVE').
+        Strict guardrail: Only allowed via Human-In-The-Loop (HITL) authorization.
+        """
+        status_norm = status.strip().upper()
+        if status_norm not in ("PAUSED", "ACTIVE"):
+            raise ValueError(f"Invalid campaign status: {status}")
+        params = {
+            "access_token": self.access_token,
+            "status": status_norm,
+        }
+        logger.info(f"🔄 Meta API: Updating campaign {campaign_id} status to {status_norm}")
+        return await self._execute_with_retry("POST", f"/{campaign_id}", params)

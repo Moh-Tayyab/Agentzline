@@ -153,14 +153,227 @@ async def _process_webhook_payload(payload: dict[str, Any]) -> None:
                     logger.info(f"💬 WhatsApp text from {sender}: {text[:100]}")
 
 
-async def _handle_button_action(button_id: str, button_text: str, sender: str, value: dict[str, Any]) -> None:
-    """Handle interactive button reply action."""
-    action = (button_id or button_text).upper()
-    logger.info(f"🔘 HITL Button Response: '{action}' from {sender}")
+import re
+import uuid
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
-    if "APPROVE" in action:
-        logger.info(f"✅ Action APPROVED by {sender} — queuing for execution")
-    elif "REJECT" in action:
-        logger.info(f"❌ Action REJECTED by {sender} — logging refusal")
-    else:
-        logger.info(f"🔘 Button selected: {action}")
+from app.core.database import async_session_maker
+from app.core.security import decrypt_token
+from app.models.tenant import Tenant
+from app.models.audit_log import AuditLog
+from app.skills.hitl_action_tokens import (
+    verify_action_token,
+    InvalidTokenError,
+    ExpiredTokenError,
+)
+from app.utils.meta_client import MetaGraphClient, MetaAPIError
+from app.utils.whatsapp_client import WhatsAppClient
+
+
+def _normalize_phone(number: str | None) -> str:
+    """Normalize phone number to digits only, mapping leading 0 to 92 for PK."""
+    if not number:
+        return ""
+    digits = re.sub(r"\D", "", number)
+    if digits.startswith("0") and len(digits) == 11:
+        digits = "92" + digits[1:]
+    return digits
+
+
+async def _handle_button_action(
+    button_id: str,
+    button_text: str,
+    sender: str,
+    value: dict[str, Any],
+) -> None:
+    """
+    Handle interactive button reply action with Phase-3 Silver Tier HITL security.
+
+    1. Validates and unpacks cryptographically signed action token.
+    2. Enforces 15-minute TTL expiration.
+    3. Guarantees idempotency via token nonce check against AuditLog.
+    4. Authorizes sender against tenant notification number.
+    5. Dispatches mutation (e.g. status='PAUSED' on Meta Graph API).
+    6. Writes immutable AuditLog and sends bilingual WhatsApp confirmation.
+    """
+    token_str = button_id or ""
+    if not token_str.startswith("v1."):
+        # Legacy or non-token button click
+        action = (button_id or button_text).upper()
+        logger.info(f"🔘 Legacy WhatsApp button clicked: '{action}' by {sender}")
+        return
+
+    try:
+        token_data = verify_action_token(token_str)
+    except ExpiredTokenError:
+        logger.warning(f"⏰ Received expired action token from {sender}")
+        wa_client = WhatsAppClient()
+        try:
+            await wa_client.send_text_message(
+                recipient_number=sender,
+                message_text="⚠️ *Request Expired*\nYeh button expire ho chuka hai (15-min limit). Baraye meherbani Ads Manager check karein.",
+            )
+        except Exception as exc:
+            logger.error(f"Failed to send expiration notice: {exc}")
+        finally:
+            await wa_client.close()
+        return
+    except InvalidTokenError as exc:
+        logger.warning(f"❌ Invalid action token rejected from {sender}: {exc}")
+        return
+
+    action = token_data["action"]
+    tenant_id_str = token_data["tenant_id"]
+    campaign_id = token_data["campaign_id"]
+    nonce = token_data["nonce"]
+
+    try:
+        tenant_uuid = uuid.UUID(tenant_id_str)
+    except ValueError:
+        logger.error(f"Malformed tenant UUID in token: {tenant_id_str}")
+        return
+
+    async with async_session_maker() as session:
+        t_res = await session.execute(
+            select(Tenant)
+            .where(Tenant.id == tenant_uuid)
+            .options(selectinload(Tenant.ad_accounts), selectinload(Tenant.credentials))
+        )
+        tenant = t_res.scalars().first()
+        if tenant is None:
+            logger.error(f"Tenant {tenant_uuid} not found for HITL action")
+            return
+
+        # Sender authorization check
+        if _normalize_phone(sender) != _normalize_phone(tenant.whatsapp_notification_number):
+            logger.warning(
+                f"🚨 Unauthorized sender {sender} attempted HITL action for tenant {tenant.id} "
+                f"(expected {tenant.whatsapp_notification_number})"
+            )
+            return
+
+        # Idempotency / Replay Protection via AuditLog
+        audit_res = await session.execute(
+            select(AuditLog).where(
+                AuditLog.tenant_id == tenant.id,
+                AuditLog.action_type.in_(["USER_APPROVED", "USER_REJECTED"]),
+            )
+        )
+        for log_entry in audit_res.scalars().all():
+            details = log_entry.action_details or {}
+            if details.get("token_nonce") == nonce:
+                logger.info(f"🔁 Duplicate action token nonce {nonce} ignored")
+                language = tenant.preferred_language or "roman_urdu"
+                dup_msg = (
+                    "ℹ️ *Action Already Processed*\nThis action was already executed."
+                    if language == "english"
+                    else "ℹ️ *Pehle Hi Process Ho Chuka Hai*\nYeh action pehle hi execute ho chuka hai."
+                )
+                wa_client = WhatsAppClient()
+                try:
+                    await wa_client.send_text_message(recipient_number=sender, message_text=dup_msg)
+                finally:
+                    await wa_client.close()
+                return
+
+        # Resolve credentials
+        meta_token = None
+        wa_token = None
+        for cred in tenant.credentials:
+            if cred.token_status == "ACTIVE":
+                if cred.platform_name == "META" and meta_token is None:
+                    try:
+                        meta_token = decrypt_token(cred.encrypted_access_token)
+                    except Exception as err:
+                        logger.error(f"Failed decrypting Meta token: {err}")
+                elif cred.platform_name == "WHATSAPP" and wa_token is None:
+                    try:
+                        wa_token = decrypt_token(cred.encrypted_access_token)
+                    except Exception as err:
+                        logger.error(f"Failed decrypting WhatsApp token: {err}")
+
+        # Link ad account if known
+        matched_acc_id = tenant.ad_accounts[0].id if tenant.ad_accounts else None
+        language = tenant.preferred_language or "roman_urdu"
+        wa_client = WhatsAppClient(access_token=wa_token)
+
+        try:
+            if action == "PAUSE":
+                meta_client = MetaGraphClient(access_token=meta_token)
+                try:
+                    await meta_client.update_campaign_status(campaign_id=campaign_id, status="PAUSED")
+                    logger.info(f"🛑 Successfully paused campaign {campaign_id} for tenant {tenant.id}")
+                finally:
+                    await meta_client.close()
+
+                session.add(AuditLog(
+                    tenant_id=tenant.id,
+                    ad_account_id=matched_acc_id,
+                    action_type="USER_APPROVED",
+                    action_details={
+                        "action": "PAUSE_CAMPAIGN",
+                        "campaign_id": campaign_id,
+                        "token_nonce": nonce,
+                        "status": "PAUSED",
+                    },
+                    executed_by="WHATSAPP_HITL",
+                    executed_by_whatsapp_num=sender,
+                ))
+                await session.commit()
+
+                confirm_msg = (
+                    f"✅ *Campaign Paused*\nCampaign *{campaign_id}* has been paused successfully. Ad spend has stopped."
+                    if language == "english"
+                    else f"✅ *Campaign Paused*\nCampaign *{campaign_id}* ko successfully pause kar diya gaya hai. Mazeed spend ruk gaya hai."
+                )
+                await wa_client.send_text_message(recipient_number=sender, message_text=confirm_msg)
+
+            elif action == "DISMISS":
+                session.add(AuditLog(
+                    tenant_id=tenant.id,
+                    ad_account_id=matched_acc_id,
+                    action_type="USER_REJECTED",
+                    action_details={
+                        "action": "KEEP_RUNNING",
+                        "campaign_id": campaign_id,
+                        "token_nonce": nonce,
+                        "status": "ACTIVE",
+                    },
+                    executed_by="WHATSAPP_HITL",
+                    executed_by_whatsapp_num=sender,
+                ))
+                await session.commit()
+
+                confirm_msg = (
+                    f"👍 *Acknowledged*\nCampaign *{campaign_id}* kept active. No changes made."
+                    if language == "english"
+                    else f"👍 *Samajh Aa Gaya*\nCampaign *{campaign_id}* active rahegi. Koi tabdeeli nahi ki gayi."
+                )
+                await wa_client.send_text_message(recipient_number=sender, message_text=confirm_msg)
+
+        except MetaAPIError as exc:
+            logger.error(f"Meta API mutation failed for campaign {campaign_id}: {exc}")
+            session.add(AuditLog(
+                tenant_id=tenant.id,
+                ad_account_id=matched_acc_id,
+                action_type="ACTION_FAILED",
+                action_details={
+                    "action": "PAUSE_CAMPAIGN",
+                    "campaign_id": campaign_id,
+                    "token_nonce": nonce,
+                    "error": str(exc),
+                },
+                executed_by="WHATSAPP_HITL",
+                executed_by_whatsapp_num=sender,
+            ))
+            await session.commit()
+
+            err_msg = (
+                f"⚠️ *Meta Error*\nFailed to pause campaign *{campaign_id}*: {exc}"
+                if language == "english"
+                else f"⚠️ *Meta Error*\nCampaign *{campaign_id}* pause karne mein error aya: {exc}"
+            )
+            await wa_client.send_text_message(recipient_number=sender, message_text=err_msg)
+        finally:
+            await wa_client.close()
