@@ -12,6 +12,7 @@ def format_daily_summary(
     summary: dict[str, Any],
     anomalies: list[dict[str, Any]],
     language: str = "roman_urdu",
+    cod_summary: dict[str, Any] | None = None,
 ) -> str:
     """
     Format the daily executive summary for WhatsApp delivery.
@@ -19,7 +20,7 @@ def format_daily_summary(
     Structure:
     1. Header with date and account name
     2. Key metrics summary (spend, ROAS, CTR, CPC)
-    3. Top performing campaigns
+    3. Real Net Profit & COD Reconciliation (if courier orders present)
     4. Anomaly alerts (if any)
     5. Action recommendations (if any)
 
@@ -27,6 +28,7 @@ def format_daily_summary(
         summary: Aggregated daily metrics dictionary.
         anomalies: List of detected anomalies.
         language: roman_urdu | english
+        cod_summary: Optional aggregated COD financial totals.
 
     Returns:
         Formatted WhatsApp message string.
@@ -51,6 +53,7 @@ def format_daily_summary(
             aggregate_roas=aggregate_roas,
             aggregate_ctr=aggregate_ctr,
             anomalies=anomalies,
+            cod_summary=cod_summary,
         )
     else:
         report = _format_english(
@@ -63,6 +66,7 @@ def format_daily_summary(
             aggregate_roas=aggregate_roas,
             aggregate_ctr=aggregate_ctr,
             anomalies=anomalies,
+            cod_summary=cod_summary,
         )
 
     return report
@@ -78,6 +82,7 @@ def _format_roman_urdu(
     aggregate_roas: float,
     aggregate_ctr: float,
     anomalies: list[dict[str, Any]],
+    cod_summary: dict[str, Any] | None = None,
 ) -> str:
     """Format report in Roman Urdu."""
 
@@ -92,6 +97,20 @@ def _format_roman_urdu(
         f"📈 ROAS: *{aggregate_roas:.2f}x*",
         f"📊 CTR: *{aggregate_ctr:.2f}%*",
     ]
+
+    if cod_summary and (cod_summary.get("total_orders", 0) > 0 or cod_summary.get("total_delivered_revenue", 0) > 0):
+        deliv_rev = cod_summary.get("total_delivered_revenue", 0)
+        deliv_rate = cod_summary.get("blended_delivery_rate_pct", 0)
+        rto_count = cod_summary.get("total_returned_orders", 0)
+        courier_fees = cod_summary.get("total_courier_fees", 0)
+        net_profit = cod_summary.get("total_net_profit", 0)
+        real_roas = cod_summary.get("blended_real_roas", 0)
+
+        lines.append("")
+        lines.append("📦 *Real Net Profit & COD Reconciliation:*")
+        lines.append(f"• Delivered Cash: *{deliv_rev:,.0f} PKR* (Delivery Rate: *{deliv_rate:.1f}%*)")
+        lines.append(f"• RTO Returns: *{rto_count} orders* (Return Loss & Fees: *{courier_fees:,.0f} PKR*)")
+        lines.append(f"• Pocket Net Margin: *{net_profit:+,.0f} PKR* (Real RoAS: *{real_roas:.2f}x* vs Paper: *{aggregate_roas:.2f}x*)")
 
     if anomalies:
         lines.append("")
@@ -115,6 +134,7 @@ def _format_english(
     aggregate_roas: float,
     aggregate_ctr: float,
     anomalies: list[dict[str, Any]],
+    cod_summary: dict[str, Any] | None = None,
 ) -> str:
     """Format report in English."""
 
@@ -129,6 +149,20 @@ def _format_english(
         f"📈 ROAS: *{aggregate_roas:.2f}x*",
         f"📊 CTR: *{aggregate_ctr:.2f}%*",
     ]
+
+    if cod_summary and (cod_summary.get("total_orders", 0) > 0 or cod_summary.get("total_delivered_revenue", 0) > 0):
+        deliv_rev = cod_summary.get("total_delivered_revenue", 0)
+        deliv_rate = cod_summary.get("blended_delivery_rate_pct", 0)
+        rto_count = cod_summary.get("total_returned_orders", 0)
+        courier_fees = cod_summary.get("total_courier_fees", 0)
+        net_profit = cod_summary.get("total_net_profit", 0)
+        real_roas = cod_summary.get("blended_real_roas", 0)
+
+        lines.append("")
+        lines.append("📦 *Real Net Profit & COD Reconciliation:*")
+        lines.append(f"• Delivered Cash: *{deliv_rev:,.0f} PKR* (Delivery Rate: *{deliv_rate:.1f}%*)")
+        lines.append(f"• RTO Returns: *{rto_count} orders* (Courier Fees & Losses: *{courier_fees:,.0f} PKR*)")
+        lines.append(f"• Pocket Net Margin: *{net_profit:+,.0f} PKR* (Real RoAS: *{real_roas:.2f}x* vs Paper: *{aggregate_roas:.2f}x*)")
 
     if anomalies:
         lines.append("")

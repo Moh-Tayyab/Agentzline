@@ -104,7 +104,46 @@ async def get_order_profit(order_id: uuid.UUID) -> dict[str, Any]:
             "campaign_id": order.campaign_id,
             **profit_summary,
         }
+from datetime import date, timedelta
+from app.skills.campaign_pnl import fetch_and_compute_tenant_pnl
 
+@router.get("/pnl")
+async def get_tenant_campaign_pnl(
+    tenant_id: uuid.UUID = Query(...),
+    date_start: date | None = Query(default=None),
+    date_end: date | None = Query(default=None),
+) -> dict[str, Any]:
+    """
+    Get aggregated Campaign P&L, COD delivery reconciliation, and net pocket margins.
+    Defaults to last 30 days if date_start/date_end are omitted.
+    """
+    end = date_end or date.today()
+    start = date_start or (end - timedelta(days=30))
+    if start > end:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="date_start cannot be after date_end",
+        )
+
+    async with async_session_maker() as session:
+        t_res = await session.execute(select(Tenant).where(Tenant.id == tenant_id))
+        if t_res.scalars().first() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Tenant {tenant_id} not found",
+            )
+        pnl_data = await fetch_and_compute_tenant_pnl(
+            session=session,
+            tenant_id=tenant_id,
+            start_date=start,
+            end_date=end,
+        )
+        return {
+            "tenant_id": str(tenant_id),
+            "date_start": str(start),
+            "date_end": str(end),
+            **pnl_data,
+        }
 
 @router.post("/product-costs", response_model=ProductCostResponse, status_code=status.HTTP_201_CREATED)
 async def upsert_product_cost(payload: ProductCostCreate) -> ProductCostResponse:

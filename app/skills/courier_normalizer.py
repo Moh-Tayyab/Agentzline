@@ -62,12 +62,67 @@ POSTEX_CODE_MAP: dict[int, str] = {
 }
 
 
+# Trax status name -> Canonical status
+TRAX_NAME_MAP: dict[str, str] = {
+    "booking created": "BOOKED",
+    "pickup scheduled": "BOOKED",
+    "booked": "BOOKED",
+    "picked up": "IN_TRANSIT",
+    "in transit": "IN_TRANSIT",
+    "received at station": "IN_TRANSIT",
+    "departed from station": "IN_TRANSIT",
+    "out for delivery": "OUT_FOR_DELIVERY",
+    "rider assigned": "OUT_FOR_DELIVERY",
+    "delivered": "DELIVERED",
+    "delivery completed": "DELIVERED",
+    "returned to shipper": "RETURNED",
+    "return completed": "RETURNED",
+    "failed delivery": "RETURNED",
+    "rto": "RETURNED",
+    "cancelled": "CANCELLED",
+    "void": "CANCELLED",
+}
+
+# Leopards status name -> Canonical status
+LEOPARDS_NAME_MAP: dict[str, str] = {
+    "booked": "BOOKED",
+    "manifested": "BOOKED",
+    "packet booked": "BOOKED",
+    "in transit": "IN_TRANSIT",
+    "dispatched": "IN_TRANSIT",
+    "received at hub": "IN_TRANSIT",
+    "out for delivery": "OUT_FOR_DELIVERY",
+    "delivered": "DELIVERED",
+    "returned": "RETURNED",
+    "return to consignor": "RETURNED",
+    "return to shipper": "RETURNED",
+    "rts": "RETURNED",
+    "cancelled": "CANCELLED",
+}
+
+# Swyft status name -> Canonical status
+SWYFT_NAME_MAP: dict[str, str] = {
+    "order_created": "BOOKED",
+    "booking_confirmed": "BOOKED",
+    "created": "BOOKED",
+    "picked_up": "IN_TRANSIT",
+    "in_transit": "IN_TRANSIT",
+    "hub_transfer": "IN_TRANSIT",
+    "out_for_delivery": "OUT_FOR_DELIVERY",
+    "delivered": "DELIVERED",
+    "returned": "RETURNED",
+    "rto": "RETURNED",
+    "rejected": "RETURNED",
+    "cancelled": "CANCELLED",
+}
+
+
 def normalize_courier_status(courier: str, raw_status: Any) -> str:
     """
     Normalize raw courier status string or integer code to canonical status.
 
     Args:
-        courier: Courier identifier (e.g., 'POSTEX').
+        courier: Courier identifier ('POSTEX', 'TRAX', 'LEOPARDS', 'SWYFT').
         raw_status: Raw status value from webhook.
 
     Returns:
@@ -77,7 +132,7 @@ def normalize_courier_status(courier: str, raw_status: Any) -> str:
     if raw_status is None:
         return "UNKNOWN"
 
-    # Numeric code lookup
+    # Numeric code lookup (PostEx)
     if isinstance(raw_status, int) or (isinstance(raw_status, str) and raw_status.isdigit()):
         code = int(raw_status)
         if courier_norm == "POSTEX":
@@ -87,19 +142,25 @@ def normalize_courier_status(courier: str, raw_status: Any) -> str:
 
     if courier_norm == "POSTEX":
         return POSTEX_NAME_MAP.get(status_str, "UNKNOWN")
+    elif courier_norm == "TRAX":
+        return TRAX_NAME_MAP.get(status_str, "UNKNOWN")
+    elif courier_norm == "LEOPARDS":
+        return LEOPARDS_NAME_MAP.get(status_str, "UNKNOWN")
+    elif courier_norm == "SWYFT":
+        return SWYFT_NAME_MAP.get(status_str, "UNKNOWN")
 
     # Generic fallback
     if "deliver" in status_str and "out" not in status_str:
         return "DELIVERED"
-    if "return" in status_str or "rto" in status_str:
+    if "return" in status_str or "rto" in status_str or "rts" in status_str:
         return "RETURNED"
-    if "out for" in status_str:
+    if "out for" in status_str or "rider" in status_str:
         return "OUT_FOR_DELIVERY"
-    if "transit" in status_str or "pickup" in status_str or "picked" in status_str:
+    if "transit" in status_str or "pickup" in status_str or "picked" in status_str or "hub" in status_str:
         return "IN_TRANSIT"
-    if "cancel" in status_str:
+    if "cancel" in status_str or "void" in status_str:
         return "CANCELLED"
-    if "book" in status_str or "place" in status_str:
+    if "book" in status_str or "place" in status_str or "create" in status_str:
         return "BOOKED"
 
     return "UNKNOWN"
@@ -173,6 +234,172 @@ def parse_postex_webhook_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "courier_name": "POSTEX",
+        "tracking_number": tracking,
+        "order_reference": order_ref,
+        "raw_status": str(raw_status or ""),
+        "normalized_status": norm_status,
+        "delivery_charges": delivery_charges,
+        "return_charges": return_charges,
+        "timestamp": timestamp,
+    }
+
+
+def parse_trax_webhook_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Parse a Trax Logistics webhook payload into normalized structure."""
+    tracking = (
+        payload.get("tracking_number")
+        or payload.get("trackingNumber")
+        or payload.get("consignment_number")
+    )
+    if tracking:
+        tracking = str(tracking).strip()
+
+    order_ref = (
+        payload.get("order_id")
+        or payload.get("orderId")
+        or payload.get("order_number")
+        or payload.get("order_reference")
+    )
+    if order_ref:
+        order_ref = str(order_ref).strip()
+
+    raw_status = payload.get("status") or payload.get("tracking_status")
+    norm_status = normalize_courier_status("TRAX", raw_status)
+
+    delivery_raw = payload.get("charges") or payload.get("delivery_fee") or 0
+    return_raw = payload.get("return_charges") or payload.get("return_fee") or 0
+
+    try:
+        delivery_charges = Decimal(str(delivery_raw)).quantize(Decimal("0.01"))
+    except Exception:
+        delivery_charges = Decimal("0.00")
+
+    try:
+        return_charges = Decimal(str(return_raw)).quantize(Decimal("0.01"))
+    except Exception:
+        return_charges = Decimal("0.00")
+
+    ts_raw = payload.get("timestamp") or payload.get("date")
+    timestamp = datetime.now(timezone.utc)
+    if ts_raw:
+        try:
+            if isinstance(ts_raw, str):
+                timestamp = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+        except Exception:
+            pass
+
+    return {
+        "courier_name": "TRAX",
+        "tracking_number": tracking,
+        "order_reference": order_ref,
+        "raw_status": str(raw_status or ""),
+        "normalized_status": norm_status,
+        "delivery_charges": delivery_charges,
+        "return_charges": return_charges,
+        "timestamp": timestamp,
+    }
+
+
+def parse_leopards_webhook_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Parse a Leopards Courier webhook payload into normalized structure."""
+    tracking = (
+        payload.get("consignment_no")
+        or payload.get("tracking_number")
+        or payload.get("cn_number")
+    )
+    if tracking:
+        tracking = str(tracking).strip()
+
+    order_ref = (
+        payload.get("booked_packet_order_id")
+        or payload.get("order_id")
+        or payload.get("order_reference")
+    )
+    if order_ref:
+        order_ref = str(order_ref).strip()
+
+    raw_status = payload.get("status") or payload.get("shipment_status")
+    norm_status = normalize_courier_status("LEOPARDS", raw_status)
+
+    delivery_raw = payload.get("delivery_charges") or payload.get("charges") or 0
+    return_raw = payload.get("return_charges") or 0
+
+    try:
+        delivery_charges = Decimal(str(delivery_raw)).quantize(Decimal("0.01"))
+    except Exception:
+        delivery_charges = Decimal("0.00")
+
+    try:
+        return_charges = Decimal(str(return_raw)).quantize(Decimal("0.01"))
+    except Exception:
+        return_charges = Decimal("0.00")
+
+    ts_raw = payload.get("activity_date") or payload.get("timestamp")
+    timestamp = datetime.now(timezone.utc)
+    if ts_raw:
+        try:
+            if isinstance(ts_raw, str):
+                timestamp = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+        except Exception:
+            pass
+
+    return {
+        "courier_name": "LEOPARDS",
+        "tracking_number": tracking,
+        "order_reference": order_ref,
+        "raw_status": str(raw_status or ""),
+        "normalized_status": norm_status,
+        "delivery_charges": delivery_charges,
+        "return_charges": return_charges,
+        "timestamp": timestamp,
+    }
+
+
+def parse_swyft_webhook_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Parse a Swyft Logistics webhook payload into normalized structure."""
+    tracking = (
+        payload.get("tracking_code")
+        or payload.get("tracking_number")
+        or payload.get("parcel_id")
+    )
+    if tracking:
+        tracking = str(tracking).strip()
+
+    order_ref = (
+        payload.get("reference_id")
+        or payload.get("order_id")
+        or payload.get("order_number")
+    )
+    if order_ref:
+        order_ref = str(order_ref).strip()
+
+    raw_status = payload.get("status") or payload.get("state")
+    norm_status = normalize_courier_status("SWYFT", raw_status)
+
+    delivery_raw = payload.get("shipping_fee") or payload.get("delivery_fee") or 0
+    return_raw = payload.get("return_fee") or 0
+
+    try:
+        delivery_charges = Decimal(str(delivery_raw)).quantize(Decimal("0.01"))
+    except Exception:
+        delivery_charges = Decimal("0.00")
+
+    try:
+        return_charges = Decimal(str(return_raw)).quantize(Decimal("0.01"))
+    except Exception:
+        return_charges = Decimal("0.00")
+
+    ts_raw = payload.get("created_at") or payload.get("timestamp")
+    timestamp = datetime.now(timezone.utc)
+    if ts_raw:
+        try:
+            if isinstance(ts_raw, str):
+                timestamp = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+        except Exception:
+            pass
+
+    return {
+        "courier_name": "SWYFT",
         "tracking_number": tracking,
         "order_reference": order_ref,
         "raw_status": str(raw_status or ""),

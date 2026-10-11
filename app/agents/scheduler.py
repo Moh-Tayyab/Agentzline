@@ -34,6 +34,7 @@ from app.skills.intraday_pacing import (
     set_cached_budget,
 )
 from app.skills.hitl_action_tokens import generate_action_token
+from app.skills.campaign_pnl import fetch_and_compute_tenant_pnl
 
 scheduler = AsyncIOScheduler()
 
@@ -85,9 +86,25 @@ async def _process_tenant_report(
                     except Exception as err:
                         logger.error(f"Failed to decrypt WhatsApp token for tenant {tenant.id}: {err}")
 
+        # Phase-4 Gold Tier: COD Financial Reconciliation
+        cod_summary = None
+        try:
+            today_d = date.today()
+            pnl = await fetch_and_compute_tenant_pnl(
+                session=session,
+                tenant_id=tenant.id,
+                start_date=today_d - timedelta(days=1),
+                end_date=today_d,
+            )
+            totals = pnl.get("totals", {})
+            if totals.get("total_orders", 0) > 0 or totals.get("total_delivered_revenue", 0) > 0:
+                cod_summary = totals
+        except Exception as pnl_err:
+            logger.debug(f"COD financial summary skipped for {tenant.id}: {pnl_err}")
+
         logger.info(
-            f"🚀 Running Bronze Tier pipeline for {tenant.company_name} "
-            f"({len(active_account_ids)} accounts, custom_meta_token={'YES' if meta_token else 'NO'})"
+            f"🚀 Running daily report pipeline for {tenant.company_name} "
+            f"({len(active_account_ids)} accounts, COD={'YES' if cod_summary else 'NO'})"
         )
 
         state: BronzeAgentState = {
@@ -103,6 +120,7 @@ async def _process_tenant_report(
             "language": tenant.preferred_language or "roman_urdu",
             "meta_access_token": meta_token,
             "whatsapp_access_token": whatsapp_token,
+            "cod_summary": cod_summary,
             "audit_actions": [],
             "errors": [],
         }

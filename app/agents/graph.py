@@ -113,10 +113,13 @@ async def format_report_node(state: BronzeAgentState) -> dict[str, Any]:
 
     logger.info(f"📝 Formatting report (lang={language})")
 
+    cod_summary = state.get("cod_summary")
+
     report_text = format_daily_summary(
         summary=daily_summary,
         anomalies=anomalies,
         language=language,
+        cod_summary=cod_summary,
     )
 
     return {"report_text": report_text}
