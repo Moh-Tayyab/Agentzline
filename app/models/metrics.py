@@ -8,11 +8,10 @@ Each row is one campaign's metrics for one date.
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import String, Integer, Numeric, Date, DateTime, ForeignKey, func
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import String, Integer, Numeric, Date, DateTime, ForeignKey, func, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base
+from app.models.base import Base, JSON_TYPE
 
 
 class CampaignMetricsSnapshot(Base):
@@ -26,10 +25,10 @@ class CampaignMetricsSnapshot(Base):
     __tablename__ = "campaign_metrics_snapshots"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     ad_account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(as_uuid=True),
         ForeignKey("ad_accounts.id", ondelete="CASCADE"),
         nullable=False,
     )
@@ -51,7 +50,7 @@ class CampaignMetricsSnapshot(Base):
     cpa: Mapped[float | None] = mapped_column(Numeric(10, 2))
 
     # Full raw API response for reprocessing
-    raw_payload: Mapped[dict | None] = mapped_column(JSONB)
+    raw_payload: Mapped[dict | None] = mapped_column(JSON_TYPE)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

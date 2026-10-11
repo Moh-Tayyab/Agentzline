@@ -7,8 +7,7 @@ Multi-tenant agency/brand structure — the top-level organizational unit.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, DateTime, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import String, DateTime, func, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -25,7 +24,7 @@ class Tenant(Base):
     __tablename__ = "tenants"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     company_name: Mapped[str] = mapped_column(String(255), nullable=False)
     country_code: Mapped[str] = mapped_column(String(10), default="PK")
@@ -43,8 +42,18 @@ class Tenant(Base):
     )
 
     # Relationships
-    ad_accounts = relationship("AdAccount", back_populates="tenant", lazy="selectin")
-    credentials = relationship("PlatformCredential", back_populates="tenant", lazy="selectin")
+    ad_accounts = relationship(
+        "AdAccount",
+        back_populates="tenant",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+    )
+    credentials = relationship(
+        "PlatformCredential",
+        back_populates="tenant",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return f"<Tenant {self.company_name}>"

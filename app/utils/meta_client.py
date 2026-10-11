@@ -5,7 +5,11 @@ Async HTTP client for read-only Meta Marketing API calls.
 Bronze Tier: Only fetches campaign insights and account structure.
 """
 
+import asyncio
 from datetime import date
+import json
+import random
+from typing import Any
 
 import httpx
 from loguru import logger
@@ -13,12 +17,20 @@ from loguru import logger
 from app.core.config import get_settings
 
 
+class MetaAPIError(Exception):
+    """Base exception for Meta API errors."""
+    def __init__(self, message: str, code: int | None = None, is_transient: bool = False):
+        super().__init__(message)
+        self.code = code
+        self.is_transient = is_transient
+
+
 class MetaGraphClient:
     """
     Async client for Meta Marketing Graph API.
 
-    All methods are read-only — no mutations in Bronze Tier.
-    Handles pagination, rate limiting, and error retry logic.
+    All methods are strictly read-only — no mutations in Bronze Tier.
+    Handles pagination, rate limiting backoff with jitter, and token error detection.
     """
 
     BASE_URL = "https://graph.facebook.com"
@@ -38,10 +50,61 @@ class MetaGraphClient:
             )
         return self._client
 
-    async def close(self):
-        """Close the HTTP client session."""
+    async def close(self) -> None:
+        """Close the HTTP client session to prevent connection leaks."""
         if self._client and not self._client.is_closed:
             await self._client.aclose()
+
+    async def _execute_with_retry(self, method: str, url: str, params: dict[str, Any]) -> dict[str, Any]:
+        """
+        Execute HTTP request with exponential backoff and jitter for transient errors.
+        Fails fast without retry on Code 190 (Invalid/Expired Token).
+        """
+        client = await self._get_client()
+        max_retries = 3
+        backoff_base = 2.0
+
+        for attempt in range(max_retries):
+            try:
+                response = await client.request(method, url, params=params)
+                data = response.json()
+
+                if "error" in data:
+                    err = data["error"]
+                    err_code = err.get("code")
+                    err_msg = err.get("message", "Unknown Meta error")
+
+                    # Code 190: Invalid / expired access token -> Fail immediately
+                    if err_code == 190:
+                        logger.error(f"❌ Meta API Authentication failed (Code 190): {err_msg}")
+                        raise MetaAPIError(f"Meta token expired or invalid: {err_msg}", code=190, is_transient=False)
+
+                    # Transient codes: 429, 4 (Too many calls), 17 (User request limit), 32 (Page request limit)
+                    if err_code in (4, 17, 32) or response.status_code == 429:
+                        if attempt < max_retries - 1:
+                            jitter = random.uniform(0.5, 1.5)
+                            sleep_time = (backoff_base ** attempt) + jitter
+                            logger.warning(
+                                f"⚠️ Meta rate limit hit (code {err_code}). Retrying in {sleep_time:.2f}s (attempt {attempt + 1}/{max_retries})"
+                            )
+                            await asyncio.sleep(sleep_time)
+                            continue
+                        raise MetaAPIError(f"Meta rate limit exceeded: {err_msg}", code=err_code, is_transient=True)
+
+                    raise MetaAPIError(f"Meta API error [{err_code}]: {err_msg}", code=err_code, is_transient=False)
+
+                response.raise_for_status()
+                return data
+
+            except httpx.RequestError as exc:
+                if attempt < max_retries - 1:
+                    sleep_time = (backoff_base ** attempt) + random.uniform(0.5, 1.0)
+                    logger.warning(f"⚠️ Network error connecting to Meta: {exc}. Retrying in {sleep_time:.2f}s")
+                    await asyncio.sleep(sleep_time)
+                    continue
+                raise MetaAPIError(f"Network error communicating with Meta API: {exc}", is_transient=True)
+
+        raise MetaAPIError("Exceeded max retries for Meta API call", is_transient=True)
 
     async def get_account_insights(
         self,
@@ -49,18 +112,18 @@ class MetaGraphClient:
         date_start: date,
         date_end: date,
         fields: list[str] | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """
-        Fetch campaign-level insights for an ad account.
+        Fetch campaign-level insights for an ad account with full pagination.
 
         Args:
             ad_account_id: Meta ad account ID (e.g., act_123456789).
-            date_start: Start date for the reporting window.
-            date_end: End date for the reporting window.
+            date_start: Start date for reporting window.
+            date_end: End date for reporting window.
             fields: List of metric fields to request.
 
         Returns:
-            List of campaign insight dictionaries.
+            List of all campaign insight dictionaries across pages.
         """
         default_fields = [
             "campaign_name",
@@ -69,69 +132,60 @@ class MetaGraphClient:
             "impressions",
             "clicks",
             "actions",
+            "action_values",
             "cost_per_action_type",
             "ctr",
             "cpc",
             "frequency",
-            "roas",
         ]
 
         params = {
             "access_token": self.access_token,
             "fields": ",".join(fields or default_fields),
-            "time_range": json_dumps({"since": str(date_start), "until": str(date_end)}),
+            "time_range": json.dumps({"since": str(date_start), "until": str(date_end)}),
             "level": "campaign",
-            "date_preset": "maximum",
+            "limit": "100",
+            "use_unified_attribution_setting": "true",
         }
 
-        client = await self._get_client()
         endpoint = f"/{ad_account_id}/insights"
+        logger.info(f"📊 Fetching insights for {ad_account_id} ({date_start} to {date_end})")
 
-        logger.info(f"📊 Fetching insights: {ad_account_id} ({date_start} to {date_end})")
+        all_records: list[dict[str, Any]] = []
+        data = await self._execute_with_retry("GET", endpoint, params)
+        all_records.extend(data.get("data", []))
 
-        response = await client.get(endpoint, params=params)
-        response.raise_for_status()
+        # Handle pagination cursor
+        client = await self._get_client()
+        paging = data.get("paging", {})
+        next_url = paging.get("next")
 
-        data = response.json()
-        return data.get("data", [])
+        while next_url:
+            try:
+                resp = await client.get(next_url)
+                resp.raise_for_status()
+                page_data = resp.json()
+                page_records = page_data.get("data", [])
+                if not page_records:
+                    break
+                all_records.extend(page_records)
+                next_url = page_data.get("paging", {}).get("next")
+            except Exception as exc:
+                logger.warning(f"Error fetching next insights page: {exc}")
+                break
 
-    async def get_campaign_details(
-        self,
-        campaign_id: str,
-    ) -> dict:
-        """
-        Fetch details for a specific campaign.
+        return all_records
 
-        Args:
-            campaign_id: Meta campaign ID.
-
-        Returns:
-            Campaign detail dictionary.
-        """
+    async def get_campaign_details(self, campaign_id: str) -> dict[str, Any]:
+        """Fetch details for a specific campaign."""
         params = {
             "access_token": self.access_token,
             "fields": "name,status,objective,daily_budget,lifetime_budget",
         }
+        return await self._execute_with_retry("GET", f"/{campaign_id}", params)
 
-        client = await self._get_client()
-        response = await client.get(f"/{campaign_id}", params=params)
-        response.raise_for_status()
-
-        return response.json()
-
-    async def get_ad_account_list(
-        self,
-        business_id: str | None = None,
-    ) -> list[dict]:
-        """
-        List all ad accounts accessible by the system user.
-
-        Args:
-            business_id: Meta Business ID (falls back to settings).
-
-        Returns:
-            List of ad account dictionaries.
-        """
+    async def get_ad_account_list(self, business_id: str | None = None) -> list[dict[str, Any]]:
+        """List all ad accounts accessible by the business user."""
         settings = get_settings()
         bid = business_id or settings.META_BUSINESS_ID
 
@@ -139,16 +193,5 @@ class MetaGraphClient:
             "access_token": self.access_token,
             "fields": "id,name,account_status,currency",
         }
-
-        client = await self._get_client()
-        response = await client.get(f"/{bid}/owned_ad_accounts", params=params)
-        response.raise_for_status()
-
-        data = response.json()
+        data = await self._execute_with_retry("GET", f"/{bid}/owned_ad_accounts", params)
         return data.get("data", [])
-
-
-def json_dumps(obj: dict) -> str:
-    """Simple JSON serialization for query parameters."""
-    import json
-    return json.dumps(obj)

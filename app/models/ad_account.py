@@ -8,8 +8,7 @@ Bronze Tier: stores account config and budget ceiling only.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Boolean, Numeric, DateTime, ForeignKey, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import String, Boolean, Numeric, DateTime, ForeignKey, func, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -26,10 +25,10 @@ class AdAccount(Base):
     __tablename__ = "ad_accounts"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
     )
     platform: Mapped[str] = mapped_column(String(50), default="META")
     external_account_id: Mapped[str] = mapped_column(
@@ -56,7 +55,10 @@ class AdAccount(Base):
     # Relationships
     tenant = relationship("Tenant", back_populates="ad_accounts")
     metrics_snapshots = relationship(
-        "CampaignMetricsSnapshot", back_populates="ad_account", lazy="selectin"
+        "CampaignMetricsSnapshot",
+        back_populates="ad_account",
+        lazy="selectin",
+        cascade="all, delete-orphan",
     )
 
     def __repr__(self) -> str:

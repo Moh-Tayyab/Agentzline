@@ -14,6 +14,7 @@ from loguru import logger
 from app.core.config import get_settings
 from app.core.database import init_db
 from app.api.router import api_router
+from app.agents.scheduler import start_scheduler, stop_scheduler
 
 
 @asynccontextmanager
@@ -22,12 +23,17 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info(f"🚀 AgentZline starting in {settings.APP_ENV} mode")
 
-    # Initialize database connection pool
+    # Initialize database connection pool & dev tables
     await init_db()
     logger.info("✅ Database connection pool initialized")
 
+    # Start APScheduler for daily report jobs
+    start_scheduler()
+
     yield
 
+    # Gracefully stop background schedulers
+    stop_scheduler()
     logger.info("🛑 AgentZline shutting down")
 
 

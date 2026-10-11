@@ -8,11 +8,10 @@ Every proposed action, approval, and rejection is logged here.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, DateTime, ForeignKey, func
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import String, DateTime, ForeignKey, func, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base
+from app.models.base import Base, JSON_TYPE
 
 
 class AuditLog(Base):
@@ -31,17 +30,17 @@ class AuditLog(Base):
     __tablename__ = "agent_action_audit_logs"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("tenants.id"), nullable=False
     )
     ad_account_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("ad_accounts.id")
+        Uuid(as_uuid=True), ForeignKey("ad_accounts.id")
     )
 
     action_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    action_details: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    action_details: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
     executed_by: Mapped[str] = mapped_column(
         String(100), default="AGENTZLINE_ENGINE"
     )

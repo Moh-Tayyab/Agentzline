@@ -54,12 +54,19 @@ class Settings(BaseSettings):
     # ── Scheduling ───────────────────────────────────────────────────────
     DAILY_REPORT_TIME: str = "09:00"
     REPORT_TIMEZONE: str = "Asia/Karachi"
+    SCHEDULER_JITTER_MAX_SECONDS: int = 300  # Spread window (0-300s) to prevent 9 AM thundering herd
+    TOKEN_EXPIRY_WARNING_DAYS: int = 7  # Warn when credential expires within this window
 
     # ── Bronze Tier Thresholds ───────────────────────────────────────────
     DEFAULT_TARGET_ROAS: float = 1.5
     DEFAULT_TARGET_CPA_PKR: float = 500.0
     CPA_SURGE_THRESHOLD_PERCENT: float = 25.0
     BUDGET_CEILING_DAILY_INCREASE_PCT: float = 20.0
+
+    # ── Phase-2 Intraday Pacing Alerts ─────────────────────────────────────
+    INTRADAY_BLEED_SPEND_RATIO: float = 0.5  # Alert when intraday spend > 50% of daily budget
+    INTRADAY_BLEED_CTR_THRESHOLD: float = 0.6  # ... with zero conversions and CTR below this %
+    INTRADAY_SUPPRESSION_HOURS: int = 24  # Max 1 pacing alert per campaign per window
 
 
 @lru_cache

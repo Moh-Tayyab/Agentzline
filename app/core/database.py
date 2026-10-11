@@ -4,21 +4,28 @@ AgentZline Database Configuration.
 Async SQLAlchemy session factory and engine setup for PostgreSQL.
 """
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from collections.abc import AsyncGenerator
+
 from loguru import logger
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
 
 settings = get_settings()
 
-# Async engine — configured from DATABASE_URL
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=settings.DATABASE_ECHO,
-    pool_size=10,
-    max_overflow=20,
-    pool_pre_ping=True,
-)
+# Engine kwargs based on database driver
+engine_kwargs: dict[str, object] = {
+    "echo": settings.DATABASE_ECHO,
+}
+if "sqlite" not in settings.DATABASE_URL:
+    engine_kwargs.update({
+        "pool_size": 5,
+        "max_overflow": 10,
+        "pool_pre_ping": True,
+    })
+
+engine = create_async_engine(settings.DATABASE_URL, **engine_kwargs)
 
 # Session factory for dependency injection
 AsyncSessionLocal = async_sessionmaker(
@@ -26,17 +33,27 @@ AsyncSessionLocal = async_sessionmaker(
     class_=AsyncSession,
     expire_on_commit=False,
 )
+async_session_maker = AsyncSessionLocal
 
 
 async def init_db() -> None:
-    """Initialize database connection pool. Called during app startup."""
+    """Initialize database connection pool and dev tables. Called during app startup."""
     logger.info(f"Connecting to database: {settings.DATABASE_URL.split('@')[-1]}")
-    # Connection test
+    # Connection test using explicit executable text clause
     async with engine.begin() as conn:
-        await conn.execute(conn.get_raw_connection().__class__.__module__ and "SELECT 1")
+        await conn.execute(text("SELECT 1"))
+
+    # In development mode, auto-create tables if Alembic migrations haven't run yet
+    if settings.APP_ENV == "development":
+        from app.models.base import Base
+        import app.models  # Ensure all model classes are registered on Base.metadata
+
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("✅ Database tables verified/created in development mode")
 
 
-async def get_db() -> AsyncSession:
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency that yields an async database session."""
     async with AsyncSessionLocal() as session:
         try:

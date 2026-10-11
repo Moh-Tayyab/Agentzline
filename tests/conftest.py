@@ -8,10 +8,23 @@ import pytest
 from cryptography.fernet import Fernet
 from httpx import AsyncClient, ASGITransport
 
-# Generate a valid Fernet key for tests (must be set before any app imports)
+# Generate a valid Fernet key and sqlite database for tests (must be set before any app imports)
 os.environ.setdefault("FERNET_ENCRYPTION_KEY", Fernet.generate_key().decode())
+os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///file:testdb?mode=memory&cache=shared&uri=true")
 
 from app.main import app  # noqa: E402
+from app.core.database import init_db, engine
+from app.models.base import Base
+
+
+@pytest.fixture(autouse=True)
+async def setup_test_db():
+    """Ensure database schema is created for tests."""
+    await init_db()
+    yield
+    async with engine.begin() as conn:
+        for table in reversed(Base.metadata.sorted_tables):
+            await conn.execute(table.delete())
 
 
 @pytest.fixture

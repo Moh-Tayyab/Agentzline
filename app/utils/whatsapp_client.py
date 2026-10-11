@@ -22,10 +22,14 @@ class WhatsAppClient:
 
     BASE_URL = "https://graph.facebook.com"
 
-    def __init__(self):
+    def __init__(
+        self,
+        access_token: str | None = None,
+        phone_number_id: str | None = None,
+    ):
         settings = get_settings()
-        self.phone_number_id = settings.WHATSAPP_PHONE_NUMBER_ID
-        self.access_token = settings.WHATSAPP_ACCESS_TOKEN
+        self.phone_number_id = phone_number_id or settings.WHATSAPP_PHONE_NUMBER_ID
+        self.access_token = access_token or settings.WHATSAPP_ACCESS_TOKEN
         self.api_version = settings.META_API_VERSION
         self._client: httpx.AsyncClient | None = None
 

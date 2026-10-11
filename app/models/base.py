@@ -7,9 +7,13 @@ SQLAlchemy declarative base for all ORM models.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import DateTime, func, Uuid, JSON
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+# Cross-compatible JSON type (PostgreSQL JSONB in production, JSON in SQLite)
+JSON_TYPE = JSON().with_variant(JSONB, "postgresql")
 
 
 class Base(DeclarativeBase):
@@ -37,7 +41,7 @@ class UUIDMixin:
     """Mixin that adds a UUID primary key."""
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
     )

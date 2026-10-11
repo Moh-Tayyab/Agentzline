@@ -8,8 +8,7 @@ Tokens are encrypted at rest using Fernet before database storage.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Text, DateTime, ForeignKey, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import String, Text, DateTime, ForeignKey, func, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -27,10 +26,10 @@ class PlatformCredential(Base):
     __tablename__ = "platform_credentials"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
     )
     platform_name: Mapped[str] = mapped_column(
         String(50), nullable=False
