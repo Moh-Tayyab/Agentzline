@@ -54,6 +54,18 @@ class Tenant(Base):
         lazy="selectin",
         cascade="all, delete-orphan",
     )
+    orders = relationship(
+        "Order",
+        back_populates="tenant",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+    )
+    product_costs = relationship(
+        "ProductCost",
+        back_populates="tenant",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return f"<Tenant {self.company_name}>"

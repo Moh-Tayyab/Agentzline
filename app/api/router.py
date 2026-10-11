@@ -6,7 +6,15 @@ Aggregates all route modules under a single v1 prefix.
 
 from fastapi import APIRouter
 
-from app.api.endpoints import health, whatsapp_webhook, meta_accounts, credentials, tenants
+from app.api.endpoints import (
+    credentials,
+    courier_webhook,
+    health,
+    meta_accounts,
+    orders,
+    tenants,
+    whatsapp_webhook,
+)
 
 api_router = APIRouter()
 
@@ -39,4 +47,18 @@ api_router.include_router(
     credentials.router,
     prefix="/credentials",
     tags=["credentials"],
+)
+
+# Phase-4 Gold Tier: Orders and Product Costs (COGS)
+api_router.include_router(
+    orders.router,
+    prefix="/orders",
+    tags=["orders"],
+)
+
+# Phase-4 Gold Tier: Multi-courier webhook receiver (PostEx MVP)
+api_router.include_router(
+    courier_webhook.router,
+    prefix="/courier",
+    tags=["courier"],
 )

@@ -14,6 +14,9 @@ from app.models import (
     PlatformCredential,
     CampaignMetricsSnapshot,
     AuditLog,
+    Order,
+    CourierEvent,
+    ProductCost,
 )
 from app.core.config import get_settings
 
