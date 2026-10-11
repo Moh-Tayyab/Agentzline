@@ -29,6 +29,7 @@ class BronzeAgentState(TypedDict, total=False):
     normalized_metrics: list[dict[str, Any]]
     anomalies: list[dict[str, Any]]
     daily_summary: dict[str, Any]
+    cod_summary: dict[str, Any] | None
 
     # Report generation
     report_text: str
