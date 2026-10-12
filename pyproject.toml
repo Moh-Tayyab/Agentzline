@@ -1,12 +1,12 @@
 [project]
 name = "agentzline"
 version = "0.1.0"
-description = "Hyper-Focused AI Media Buyer Engine — Bronze Tier MVP (Meta Ads Read-Only + WhatsApp Daily Reports)"
+description = "Autonomous AI Media Buyer & COD Reconciliation Engine for Meta Ads & Pakistani E-Commerce"
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "Proprietary"}
+license = {text = "MIT"}
 authors = [
-    {name = "AgentZline Team"},
+    {name = "Muhammad Tayyab"},
 ]
 
 dependencies = [
