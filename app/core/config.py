@@ -7,6 +7,7 @@ All secrets are loaded from .env — never hardcoded.
 
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,6 +30,16 @@ class Settings(BaseSettings):
     # ── Database ─────────────────────────────────────────────────────────
     DATABASE_URL: str = "postgresql+asyncpg://agentzline:changeme@localhost:5432/agentzline"
     DATABASE_ECHO: bool = False
+
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def _normalize_db_url(cls, v: str) -> str:
+        """Accept Render-style postgres:// URLs by mapping them to asyncpg driver."""
+        if v.startswith("postgres://"):
+            return "postgresql+asyncpg://" + v[len("postgres://"):]
+        if v.startswith("postgresql://"):
+            return "postgresql+asyncpg://" + v[len("postgresql://"):]
+        return v
 
     # ── Encryption (Fernet for token vault) ──────────────────────────────
     FERNET_ENCRYPTION_KEY: str = "CHANGE_ME_TO_A_REAL_FERNET_KEY"

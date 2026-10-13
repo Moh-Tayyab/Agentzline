@@ -1,0 +1,161 @@
+{
+	"info": {
+		"name": "AgentZline Local Pilot",
+		"description": "End-to-end pilot chain: tenant → credentials → orders → courier webhooks → P&L. Set base_url, then run in order. tenant_id auto-chains from step 1.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{ "key": "base_url", "value": "http://127.0.0.1:8001" },
+		{ "key": "tenant_id", "value": "" },
+		{ "key": "courier_secret", "value": "local-test-secret-999" }
+	],
+	"item": [
+		{
+			"name": "0 Health",
+			"request": { "method": "GET", "url": "{{base_url}}/api/v1/health" }
+		},
+		{
+			"name": "1 Create tenant",
+			"request": {
+				"method": "POST",
+				"header": [{ "key": "Content-Type", "value": "application/json" }],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"company_name\": \"Gul Ahmed Fabrics PK\",\n  \"preferred_language\": \"roman_urdu\",\n  \"whatsapp_notification_number\": \"+923001234567\"\n}"
+				},
+				"url": "{{base_url}}/api/v1/tenants"
+			},
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test('201 created', () => pm.response.to.have.status(201));",
+							"const j = pm.response.json();",
+							"pm.collectionVariables.set('tenant_id', j.id);"
+						]
+					}
+				}
+			]
+		},
+		{
+			"name": "2 Register META credential",
+			"request": {
+				"method": "POST",
+				"header": [{ "key": "Content-Type", "value": "application/json" }],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"tenant_id\": \"{{tenant_id}}\",\n  \"platform_name\": \"META\",\n  \"access_token\": \"PASTE_META_SYSTEM_USER_TOKEN\",\n  \"expires_in_days\": 60\n}"
+				},
+				"url": "{{base_url}}/api/v1/credentials"
+			},
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test('201 registered', () => pm.response.to.have.status(201));",
+							"pm.test('plaintext never returned', () => {",
+							"  const raw = pm.response.text();",
+							"  pm.expect(raw).to.not.include('PASTE_META_SYSTEM_USER_TOKEN');",
+							"});"
+						]
+					}
+				}
+			]
+		},
+		{
+			"name": "3a Create order 001",
+			"request": {
+				"method": "POST",
+				"header": [{ "key": "Content-Type", "value": "application/json" }],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"tenant_id\": \"{{tenant_id}}\",\n  \"external_order_id\": \"ORD-LOCAL-001\",\n  \"tracking_number\": \"PE-TRACK-101\",\n  \"courier_name\": \"POSTEX\",\n  \"campaign_id\": \"c_summer_lawn\",\n  \"total_amount_pkr\": 5000,\n  \"cogs_amount_pkr\": 2000,\n  \"courier_fee_pkr\": 250\n}"
+				},
+				"url": "{{base_url}}/api/v1/orders"
+			}
+		},
+		{
+			"name": "3b Create order 002",
+			"request": {
+				"method": "POST",
+				"header": [{ "key": "Content-Type", "value": "application/json" }],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"tenant_id\": \"{{tenant_id}}\",\n  \"external_order_id\": \"ORD-LOCAL-002\",\n  \"tracking_number\": \"PE-TRACK-102\",\n  \"courier_name\": \"POSTEX\",\n  \"campaign_id\": \"c_summer_lawn\",\n  \"total_amount_pkr\": 5000,\n  \"cogs_amount_pkr\": 2000,\n  \"courier_fee_pkr\": 250\n}"
+				},
+				"url": "{{base_url}}/api/v1/orders"
+			}
+		},
+		{
+			"name": "4a Webhook without secret (expect 401)",
+			"request": {
+				"method": "POST",
+				"header": [{ "key": "Content-Type", "value": "application/json" }],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"trackingNumber\": \"PE-TRACK-101\",\n  \"transactionStatus\": \"delivered\"\n}"
+				},
+				"url": "{{base_url}}/api/v1/courier/webhook/postex"
+			},
+			"event": [
+				{
+					"listen": "test",
+					"script": { "exec": ["pm.test('401 rejected', () => pm.response.to.have.status(401));"] }
+				}
+			]
+		},
+		{
+			"name": "4b Webhook DELIVERED",
+			"request": {
+				"method": "POST",
+				"header": [
+					{ "key": "Content-Type", "value": "application/json" },
+					{ "key": "X-Webhook-Secret", "value": "{{courier_secret}}" }
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"trackingNumber\": \"PE-TRACK-101\",\n  \"orderRefNumber\": \"ORD-LOCAL-001\",\n  \"transactionStatus\": \"delivered\",\n  \"invoiceDeliveryCharges\": 250\n}"
+				},
+				"url": "{{base_url}}/api/v1/courier/webhook/postex"
+			}
+		},
+		{
+			"name": "4c Webhook RETURNED",
+			"request": {
+				"method": "POST",
+				"header": [
+					{ "key": "Content-Type", "value": "application/json" },
+					{ "key": "X-Webhook-Secret", "value": "{{courier_secret}}" }
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"trackingNumber\": \"PE-TRACK-102\",\n  \"orderRefNumber\": \"ORD-LOCAL-002\",\n  \"transactionStatus\": \"returned\",\n  \"invoiceDeliveryCharges\": 250,\n  \"invoiceReturnCharges\": 150\n}"
+				},
+				"url": "{{base_url}}/api/v1/courier/webhook/postex"
+			}
+		},
+		{
+			"name": "5 Campaign P&L",
+			"request": {
+				"method": "GET",
+				"url": "{{base_url}}/api/v1/orders/pnl?tenant_id={{tenant_id}}&date_start=2026-10-01&date_end=2026-10-13"
+			},
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test('200 ok', () => pm.response.to.have.status(200));",
+							"pm.test('net profit 2350', () => {",
+							"  const j = pm.response.json();",
+							"  pm.expect(j.totals.total_net_profit).to.eql(2350.0);",
+							"});"
+						]
+					}
+				}
+			]
+		}
+	]
+}

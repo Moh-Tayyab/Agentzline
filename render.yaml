@@ -1,0 +1,51 @@
+# Render.com blueprint: push repo, `render blueprint launch`, set secrets in dashboard.
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: agentzline-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # IMPORTANT: keep exactly 1 instance (APScheduler runs in-process).
+    numInstances: 1
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: agentzline-db
+          property: connectionString
+      - key: FERNET_ENCRYPTION_KEY
+        sync: false
+      - key: ACTION_TOKEN_SECRET
+        sync: false
+      - key: COURIER_WEBHOOK_SECRET
+        sync: false
+      - key: META_APP_ID
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: META_SYSTEM_USER_TOKEN
+        sync: false
+      - key: META_BUSINESS_ID
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+
+databases:
+  - name: agentzline-db
+    databaseName: agentzline
+    user: agentzline
+    # Render Postgres connectionString is postgres://... — app expects an
+    # async driver. If the deployed DATABASE_URL lacks a driver, set it to:
+    # postgresql+asyncpg://user:password@host:5432/agentzline

@@ -1,0 +1,46 @@
+# Local / VPS deploy: `docker compose up -d --build`
+# Production secrets MUST come from environment, never committed.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agentzline}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-agentzline}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentzline}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    restart: unless-stopped
+    # Deploy as a SINGLE replica: APScheduler runs in-process.
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agentzline}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-agentzline}
+      FERNET_ENCRYPTION_KEY: ${FERNET_ENCRYPTION_KEY:?set FERNET_ENCRYPTION_KEY}
+      ACTION_TOKEN_SECRET: ${ACTION_TOKEN_SECRET:?set ACTION_TOKEN_SECRET}
+      COURIER_WEBHOOK_SECRET: ${COURIER_WEBHOOK_SECRET:?set COURIER_WEBHOOK_SECRET}
+      META_APP_ID: ${META_APP_ID:-}
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      META_SYSTEM_USER_TOKEN: ${META_SYSTEM_USER_TOKEN:-}
+      META_BUSINESS_ID: ${META_BUSINESS_ID:-}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      WHATSAPP_WEBHOOK_VERIFY_TOKEN: ${WHATSAPP_WEBHOOK_VERIFY_TOKEN:?set WHATSAPP_WEBHOOK_VERIFY_TOKEN}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+
+volumes:
+  pgdata:
