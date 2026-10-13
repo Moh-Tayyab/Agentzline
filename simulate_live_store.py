@@ -269,7 +269,7 @@ def simulate():
     )
 
     print(f"\n🔐 Signed Action Token Generated (HMAC-SHA256, 15-min TTL):")
-    print(f"   Token length: {len(token)} characters (WhatsApp button safe: < 140 chars)")
+    print(f"   Token length: {len(token)} characters (WhatsApp quick-reply safe: limit is 256 chars)")
     print(f"   Token string: {token[:30]}...{token[-15:]}")
 
     print("\n📱 Interactive WhatsApp Alert Sent to Media Buyer:")
@@ -294,7 +294,7 @@ def simulate():
         print(f"   • Campaign to Pause: {verified_payload['campaign_id']}")
         print(f"   • Action: {verified_payload['action']}")
         print(f"   • Replay Protection: Token marked used in AuditLog")
-        print(f"   • Meta Graph API called: POST /{verified_payload['campaign_id']} status='PAUSED'")
+        print(f"   • Meta Graph API Mutation (Simulated): POST /{verified_payload['campaign_id']} status='PAUSED'")
         print("   🎉 CAMPAIGN SAFELY PAUSED! Budget bleeding stopped instantly!")
     else:
         print("❌ Token verification failed.")
