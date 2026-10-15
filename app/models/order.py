@@ -8,10 +8,10 @@ and marketing attribution (Meta campaign / fbclid / UTM).
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Numeric, DateTime, ForeignKey, func, Uuid
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, JSON_TYPE
+from app.models.base import JSON_TYPE, Base
 
 
 class Order(Base):
@@ -76,6 +76,10 @@ class Order(Base):
         back_populates="order",
         lazy="selectin",
         cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "external_order_id", name="uq_tenant_external_order"),
     )
 
     def __repr__(self) -> str:

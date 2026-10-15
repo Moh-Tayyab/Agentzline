@@ -8,10 +8,10 @@ Every proposed action, approval, and rejection is logged here.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, DateTime, ForeignKey, func, Uuid
+from sqlalchemy import DateTime, ForeignKey, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, JSON_TYPE
+from app.models.base import JSON_TYPE, Base
 
 
 class AuditLog(Base):
@@ -45,6 +45,7 @@ class AuditLog(Base):
         String(100), default="AGENTZLINE_ENGINE"
     )
     executed_by_whatsapp_num: Mapped[str | None] = mapped_column(String(50))
+    token_nonce: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

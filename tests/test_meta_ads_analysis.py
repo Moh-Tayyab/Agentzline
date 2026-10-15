@@ -2,7 +2,6 @@
 Tests for the Meta Ads anomaly detection skill.
 """
 
-import pytest
 
 from app.skills.meta_ads_analysis import detect_performance_anomalies
 

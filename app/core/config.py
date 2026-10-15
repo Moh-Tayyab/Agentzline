@@ -7,7 +7,7 @@ All secrets are loaded from .env — never hardcoded.
 
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -88,6 +88,35 @@ class Settings(BaseSettings):
 
     # ── Phase-4 Gold Tier Courier Webhook Security ──────────────────────────
     COURIER_WEBHOOK_SECRET: str = ""  # Shared secret token for PostEx/Trax/Leopards/Swyft webhooks
+
+    # ── API Authentication ─────────────────────────────────────────────────
+    ADMIN_API_KEY: str = ""
+
+    @model_validator(mode="after")
+    def _validate_production_secrets(self) -> "Settings":
+        if self.APP_ENV.lower() == "production":
+            from cryptography.fernet import Fernet
+
+            try:
+                Fernet(self.FERNET_ENCRYPTION_KEY.encode())
+            except Exception as exc:
+                raise ValueError(
+                    "CRITICAL: FERNET_ENCRYPTION_KEY must be a valid 32-byte url-safe base64 key in production"
+                ) from exc
+
+            required = {
+                "ACTION_TOKEN_SECRET": self.ACTION_TOKEN_SECRET,
+                "COURIER_WEBHOOK_SECRET": self.COURIER_WEBHOOK_SECRET,
+                "WHATSAPP_WEBHOOK_VERIFY_TOKEN": self.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
+                "META_APP_SECRET": self.META_APP_SECRET,
+                "ADMIN_API_KEY": self.ADMIN_API_KEY,
+            }
+            missing = [k for k, v in required.items() if not v or len(v.strip()) < 16]
+            if missing:
+                raise ValueError(
+                    f"CRITICAL: Missing or weak production secrets (<16 chars): {', '.join(missing)}"
+                )
+        return self
 
     def get_cors_origins(self) -> list[str]:
         """Parse comma-separated allowed origins."""

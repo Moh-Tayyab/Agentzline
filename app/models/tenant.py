@@ -7,7 +7,7 @@ Multi-tenant agency/brand structure — the top-level organizational unit.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, DateTime, func, Uuid
+from sqlalchemy import DateTime, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -33,6 +33,7 @@ class Tenant(Base):
         String(10), default="roman_urdu"
     )  # roman_urdu | urdu | english
     whatsapp_notification_number: Mapped[str | None] = mapped_column(String(50))
+    api_key_hash: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

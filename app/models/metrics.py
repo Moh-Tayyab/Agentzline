@@ -8,10 +8,20 @@ Each row is one campaign's metrics for one date.
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import String, Integer, Numeric, Date, DateTime, ForeignKey, func, Uuid
+from sqlalchemy import (
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+    Uuid,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, JSON_TYPE
+from app.models.base import JSON_TYPE, Base
 
 
 class CampaignMetricsSnapshot(Base):
@@ -58,6 +68,13 @@ class CampaignMetricsSnapshot(Base):
 
     # Relationships
     ad_account = relationship("AdAccount", back_populates="metrics_snapshots")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "ad_account_id", "external_campaign_id", "snapshot_date",
+            name="uq_account_campaign_date",
+        ),
+    )
 
     def __repr__(self) -> str:
         return f"<CampaignMetrics {self.campaign_name} @ {self.snapshot_date}>"

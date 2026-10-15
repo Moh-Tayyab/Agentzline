@@ -10,18 +10,18 @@ LangGraph workflow that orchestrates the daily reporting pipeline:
   6. Record audit trail
 """
 
-from datetime import datetime, date
+from datetime import date, datetime
 from typing import Any
+
+from langgraph.graph import END, StateGraph
 from loguru import logger
-from langgraph.graph import StateGraph, END
 
 from app.agents.state import BronzeAgentState
-from app.utils.meta_client import MetaGraphClient, MetaAPIError
-from app.utils.whatsapp_client import WhatsAppClient
-from app.skills.meta_normalizer import normalize_and_aggregate_metrics
-from app.skills.meta_ads_analysis import detect_performance_anomalies
 from app.skills.bilingual_report import format_daily_summary
-
+from app.skills.meta_ads_analysis import detect_performance_anomalies
+from app.skills.meta_normalizer import normalize_and_aggregate_metrics
+from app.utils.meta_client import MetaAPIError, MetaGraphClient
+from app.utils.whatsapp_client import WhatsAppClient
 
 # ── Node 1: Fetch Metrics ───────────────────────────────────────────────────
 
@@ -29,7 +29,7 @@ async def fetch_metrics_node(state: BronzeAgentState) -> dict[str, Any]:
     """Pull target date campaign metrics from Meta Graph API for all tenant accounts."""
     ad_account_ids = state.get("ad_account_ids", [])
     target_date_str = state.get("target_date")
-    
+
     if target_date_str:
         target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
     else:
@@ -50,6 +50,9 @@ async def fetch_metrics_node(state: BronzeAgentState) -> dict[str, Any]:
                     date_start=target_date,
                     date_end=target_date,
                 )
+                for ins in insights:
+                    if isinstance(ins, dict):
+                        ins["_ad_account_external_id"] = acc_id
                 raw_metrics.extend(insights)
             except MetaAPIError as err:
                 msg = f"Failed to fetch insights for {acc_id}: {err}"
@@ -81,6 +84,90 @@ async def aggregate_metrics_node(state: BronzeAgentState) -> dict[str, Any]:
         "normalized_metrics": normalized,
         "daily_summary": daily_summary,
     }
+
+
+# ── Node 2b: Persist Snapshots + Compute COD P&L ────────────────────────────
+
+async def compute_cod_pnl_node(state: BronzeAgentState) -> dict[str, Any]:
+    """Persist normalized snapshots (upsert) then compute COD reconciliation.
+
+    Placed right after aggregate_metrics so fetch_and_compute_tenant_pnl sees
+    today's Meta spend. Best-effort: never fails the report on DB errors.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    from app.core.database import async_session_maker
+    from app.models.tenant import Tenant
+    from app.skills.campaign_pnl import fetch_and_compute_tenant_pnl
+    from app.skills.meta_normalizer import persist_normalized_snapshots
+
+    tenant_id_str = state.get("tenant_id", "")
+    normalized = state.get("normalized_metrics", [])
+    target_date_str = state.get("target_date")
+    try:
+        from datetime import date as _date
+
+        snapshot_date = (
+            datetime.strptime(target_date_str, "%Y-%m-%d").date()
+            if target_date_str
+            else _date.today()
+        )
+    except Exception:
+        from datetime import date as _date
+
+        snapshot_date = _date.today()
+
+    cod_summary = state.get("cod_summary")
+    try:
+        import uuid as _uuid
+
+        tenant_uuid = _uuid.UUID(tenant_id_str)
+    except Exception:
+        return {"cod_summary": cod_summary}
+
+    try:
+        async with async_session_maker() as session:
+            # Resolve account map for snapshot ownership
+            t_res = await session.execute(
+                select(Tenant)
+                .where(Tenant.id == tenant_uuid)
+                .options(selectinload(Tenant.ad_accounts))
+            )
+            tenant = t_res.scalars().first()
+            account_map: dict[str, Any] = {}
+            if tenant is not None:
+                for acc in tenant.ad_accounts:
+                    account_map[acc.external_account_id] = acc.id
+                    account_map[str(acc.id)] = acc.id
+            if normalized and account_map:
+                try:
+                    await persist_normalized_snapshots(
+                        session, tenant_uuid, normalized, snapshot_date, account_map
+                    )
+                    await session.commit()
+                except Exception as persist_err:
+                    logger.warning(f"Snapshot persistence skipped for {tenant_id_str}: {persist_err}")
+                    await session.rollback()
+            # Compute COD P&L after snapshots are persisted
+            try:
+                pnl = await fetch_and_compute_tenant_pnl(
+                    session=session,
+                    tenant_id=tenant_uuid,
+                    start_date=snapshot_date - timedelta(days=1),
+                    end_date=snapshot_date,
+                )
+                totals = pnl.get("totals", {})
+                if totals.get("total_orders", 0) > 0 or totals.get("total_delivered_revenue", 0) > 0:
+                    cod_summary = totals
+            except Exception as pnl_err:
+                logger.warning(f"COD P&L compute skipped for {tenant_id_str}: {pnl_err}")
+        return {"cod_summary": cod_summary}
+    except Exception as exc:
+        logger.warning(f"compute_cod_pnl_node skipped for {tenant_id_str}: {exc}")
+        return {"cod_summary": cod_summary}
 
 
 # ── Node 3: Detect Anomalies ────────────────────────────────────────────────
@@ -176,19 +263,21 @@ def build_bronze_graph():
     Construct the Bronze Tier LangGraph workflow.
 
     Pipeline:
-      fetch_metrics -> aggregate_metrics -> detect_anomalies -> format_report -> send_whatsapp -> END
+      fetch_metrics -> aggregate_metrics -> compute_cod_pnl -> detect_anomalies -> format_report -> send_whatsapp -> END
     """
     graph = StateGraph(BronzeAgentState)
 
     graph.add_node("fetch_metrics", fetch_metrics_node)
     graph.add_node("aggregate_metrics", aggregate_metrics_node)
+    graph.add_node("compute_cod_pnl", compute_cod_pnl_node)
     graph.add_node("detect_anomalies", detect_anomalies_node)
     graph.add_node("format_report", format_report_node)
     graph.add_node("send_whatsapp", send_whatsapp_node)
 
     graph.set_entry_point("fetch_metrics")
     graph.add_edge("fetch_metrics", "aggregate_metrics")
-    graph.add_edge("aggregate_metrics", "detect_anomalies")
+    graph.add_edge("aggregate_metrics", "compute_cod_pnl")
+    graph.add_edge("compute_cod_pnl", "detect_anomalies")
     graph.add_edge("detect_anomalies", "format_report")
     graph.add_edge("format_report", "send_whatsapp")
     graph.add_edge("send_whatsapp", END)

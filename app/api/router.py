@@ -7,9 +7,10 @@ Aggregates all route modules under a single v1 prefix.
 from fastapi import APIRouter
 
 from app.api.endpoints import (
-    credentials,
     courier_webhook,
+    credentials,
     health,
+    hitl_actions,
     meta_accounts,
     orders,
     tenants,
@@ -61,4 +62,11 @@ api_router.include_router(
     courier_webhook.router,
     prefix="/courier",
     tags=["courier"],
+)
+
+# Phase-3 Silver Tier: Direct HITL action endpoint (POST /actions/pause)
+api_router.include_router(
+    hitl_actions.router,
+    prefix="/actions",
+    tags=["actions"],
 )

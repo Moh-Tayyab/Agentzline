@@ -7,7 +7,7 @@ Stores Cost of Goods Sold (COGS) by SKU per tenant for true net margin calculati
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Numeric, DateTime, ForeignKey, func, Uuid, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base

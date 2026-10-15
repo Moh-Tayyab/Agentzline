@@ -7,25 +7,25 @@ Schedules the daily Bronze Tier pipeline to run at the configured time
 
 import asyncio
 import random
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from app.agents.graph import build_bronze_graph
+from app.agents.state import BronzeAgentState
 from app.core.config import get_settings
 from app.core.database import async_session_maker
 from app.core.security import decrypt_token
-from app.models.tenant import Tenant
-from app.models.credential import PlatformCredential
 from app.models.audit_log import AuditLog
-from app.agents.state import BronzeAgentState
-from app.agents.graph import build_bronze_graph
-from app.utils.meta_client import MetaAPIError, MetaGraphClient
-from app.utils.whatsapp_client import WhatsAppClient
-from app.skills.meta_normalizer import normalize_campaign_insight
+from app.models.credential import PlatformCredential
+from app.models.tenant import Tenant
+from app.skills.campaign_pnl import fetch_and_compute_tenant_pnl
+from app.skills.hitl_action_tokens import generate_action_token
 from app.skills.intraday_pacing import (
     detect_intraday_pacing_alerts,
     format_pacing_alert,
@@ -33,8 +33,9 @@ from app.skills.intraday_pacing import (
     parse_meta_budget_to_pkr,
     set_cached_budget,
 )
-from app.skills.hitl_action_tokens import generate_action_token
-from app.skills.campaign_pnl import fetch_and_compute_tenant_pnl
+from app.skills.meta_normalizer import normalize_campaign_insight
+from app.utils.meta_client import MetaAPIError, MetaGraphClient
+from app.utils.whatsapp_client import WhatsAppClient
 
 scheduler = AsyncIOScheduler()
 
@@ -90,17 +91,18 @@ async def _process_tenant_report(
         cod_summary = None
         try:
             today_d = date.today()
-            pnl = await fetch_and_compute_tenant_pnl(
-                session=session,
-                tenant_id=tenant.id,
-                start_date=today_d - timedelta(days=1),
-                end_date=today_d,
-            )
+            async with async_session_maker() as pnl_session:
+                pnl = await fetch_and_compute_tenant_pnl(
+                    session=pnl_session,
+                    tenant_id=tenant.id,
+                    start_date=today_d - timedelta(days=1),
+                    end_date=today_d,
+                )
             totals = pnl.get("totals", {})
             if totals.get("total_orders", 0) > 0 or totals.get("total_delivered_revenue", 0) > 0:
                 cod_summary = totals
         except Exception as pnl_err:
-            logger.debug(f"COD financial summary skipped for {tenant.id}: {pnl_err}")
+            logger.warning(f"COD financial summary skipped for {tenant.id}: {pnl_err}")
 
         logger.info(
             f"🚀 Running daily report pipeline for {tenant.company_name} "
@@ -215,7 +217,7 @@ async def run_token_expiry_watchdog() -> dict[str, int]:
     """
     settings = get_settings()
     warning_days = int(settings.TOKEN_EXPIRY_WARNING_DAYS)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stats = {"warned": 0, "expired": 0, "checked": 0}
 
     async with async_session_maker() as session:
@@ -241,7 +243,7 @@ async def run_token_expiry_watchdog() -> dict[str, int]:
             stats["checked"] += 1
             expires_at = cred.expires_at
             if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
+                expires_at = expires_at.replace(tzinfo=UTC)
             days_left = (expires_at - now).days
             tenant = tenant_map.get(str(cred.tenant_id))
 
@@ -311,7 +313,7 @@ def _as_utc(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -449,7 +451,7 @@ async def _process_tenant_pacing(
             if not alerts:
                 return stats
 
-            window_start = datetime.now(timezone.utc) - timedelta(
+            window_start = datetime.now(UTC) - timedelta(
                 hours=int(settings.INTRADAY_SUPPRESSION_HOURS)
             )
             already = await _recently_alerted_campaigns(session, full_tenant.id, window_start)

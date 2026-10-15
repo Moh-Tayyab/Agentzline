@@ -4,7 +4,7 @@ Tests for Phase-4 Gold Tier: Orders, Product Costs, and PostEx Courier Webhook.
 
 import uuid
 from decimal import Decimal
-from datetime import datetime, timezone
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
@@ -13,7 +13,6 @@ from app.core.database import async_session_maker
 from app.main import app
 from app.models.audit_log import AuditLog
 from app.models.order import CourierEvent, Order
-from app.models.product_cost import ProductCost
 from app.models.tenant import Tenant
 from app.skills.courier_normalizer import (
     compute_net_order_profit,
@@ -367,6 +366,7 @@ async def test_trax_and_leopards_and_swyft_webhooks(courier_test_tenant):
 async def test_campaign_pnl_aggregator_endpoint(courier_test_tenant):
     """Test full Campaign P&L API aggregating ad spend and COD fulfillment."""
     from datetime import date
+
     from app.models.ad_account import AdAccount
     from app.models.metrics import CampaignMetricsSnapshot
 

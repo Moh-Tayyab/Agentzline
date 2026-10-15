@@ -6,22 +6,22 @@ suppression (24h dedup), and end-to-end pacing job with mocked APIs.
 """
 
 import uuid
-from datetime import date, datetime, timezone, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.agents.scheduler import run_intraday_pacing_job
 from app.core.database import async_session_maker
-from app.models.tenant import Tenant
 from app.models.ad_account import AdAccount
 from app.models.audit_log import AuditLog
+from app.models.tenant import Tenant
 from app.skills.intraday_pacing import (
     detect_intraday_pacing_alerts,
     format_pacing_alert,
     parse_meta_budget_to_pkr,
 )
-from app.agents.scheduler import run_intraday_pacing_job
 
 
 def _norm(cid: str, spend: float, conv: int, ctr: float) -> dict:
@@ -169,7 +169,7 @@ async def test_pacing_job_suppresses_duplicate_within_24h(pacing_tenant):
             action_type="INTRADAY_PACING_ALERT",
             action_details={"campaign_id": "camp_bleed_1", "spend": 6000.0},
             executed_by="AGENTZLINE_PACING",
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         ))
         await session.commit()
 

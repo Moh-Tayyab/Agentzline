@@ -6,9 +6,9 @@ Bronze Tier: Only fetches campaign insights and account structure.
 """
 
 import asyncio
-from datetime import date
 import json
 import random
+from datetime import date
 from typing import Any
 
 import httpx

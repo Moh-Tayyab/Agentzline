@@ -2,7 +2,7 @@
 Tests for the security module (Fernet encryption).
 """
 
-from app.core.security import encrypt_token, decrypt_token
+from app.core.security import decrypt_token, encrypt_token
 
 
 class TestTokenEncryption:

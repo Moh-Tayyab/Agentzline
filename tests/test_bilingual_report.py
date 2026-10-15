@@ -2,7 +2,6 @@
 Tests for the bilingual report formatter skill.
 """
 
-import pytest
 
 from app.skills.bilingual_report import format_daily_summary
 

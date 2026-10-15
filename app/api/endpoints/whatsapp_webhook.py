@@ -9,18 +9,44 @@ and asynchronous HITL processing.
 import hashlib
 import hmac
 import json
+import re
+import uuid
+from collections import OrderedDict
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from loguru import logger
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
+from app.core.database import async_session_maker
+from app.core.security import decrypt_token
+from app.models.audit_log import AuditLog
+from app.models.tenant import Tenant
+from app.skills.hitl_action_tokens import (
+    ExpiredTokenError,
+    InvalidTokenError,
+    verify_action_token,
+)
+from app.utils.meta_client import MetaAPIError, MetaGraphClient
+from app.utils.whatsapp_client import WhatsAppClient
 
 router = APIRouter()
 
 # In-memory deduplication set for processed message IDs (wamid)
 # In production with multiple workers, back with Redis
-_PROCESSED_MESSAGE_IDS: set[str] = set()
+# OrderedDict for LRU eviction: only oldest entry evicted on overflow
+_PROCESSED_MESSAGE_IDS: OrderedDict[str, None] = OrderedDict()
 _MAX_SEEN_IDS = 10000
 
 
@@ -49,7 +75,13 @@ async def verify_webhook(
 def _verify_meta_signature(raw_body: bytes, signature_header: str | None, app_secret: str) -> bool:
     """Verify X-Hub-Signature-256 HMAC header from Meta using raw request bytes."""
     if not app_secret:
-        # If secret is not yet configured in local dev, log warning but allow dev flow
+        # Fail closed in production; allow dev flow locally with warning
+        try:
+            if get_settings().APP_ENV.lower() == "production":
+                logger.error("❌ META_APP_SECRET not configured in production — rejecting webhook")
+                return False
+        except Exception:
+            return False
         logger.warning("⚠️ META_APP_SECRET not set — skipping HMAC signature verification in dev")
         return True
 
@@ -124,8 +156,8 @@ async def _process_webhook_payload(payload: dict[str, Any]) -> None:
                         logger.debug(f"Ignoring duplicate WhatsApp message: {msg_id}")
                         continue
                     if len(_PROCESSED_MESSAGE_IDS) >= _MAX_SEEN_IDS:
-                        _PROCESSED_MESSAGE_IDS.clear()
-                    _PROCESSED_MESSAGE_IDS.add(msg_id)
+                        _PROCESSED_MESSAGE_IDS.popitem(last=False)
+                    _PROCESSED_MESSAGE_IDS[msg_id] = None
 
                 msg_type = message.get("type")
 
@@ -151,24 +183,6 @@ async def _process_webhook_payload(payload: dict[str, Any]) -> None:
                     text = message.get("text", {}).get("body", "")
                     sender = message.get("from", "")
                     logger.info(f"💬 WhatsApp text from {sender}: {text[:100]}")
-
-
-import re
-import uuid
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload
-
-from app.core.database import async_session_maker
-from app.core.security import decrypt_token
-from app.models.tenant import Tenant
-from app.models.audit_log import AuditLog
-from app.skills.hitl_action_tokens import (
-    verify_action_token,
-    InvalidTokenError,
-    ExpiredTokenError,
-)
-from app.utils.meta_client import MetaGraphClient, MetaAPIError
-from app.utils.whatsapp_client import WhatsAppClient
 
 
 def _normalize_phone(number: str | None) -> str:
@@ -253,29 +267,24 @@ async def _handle_button_action(
             )
             return
 
-        # Idempotency / Replay Protection via AuditLog
-        audit_res = await session.execute(
-            select(AuditLog).where(
-                AuditLog.tenant_id == tenant.id,
-                AuditLog.action_type.in_(["USER_APPROVED", "USER_REJECTED"]),
-            )
+        # Idempotency / Replay Protection via indexed AuditLog.token_nonce lookup
+        existing_nonce = await session.execute(
+            select(AuditLog.id).where(AuditLog.token_nonce == nonce).limit(1)
         )
-        for log_entry in audit_res.scalars().all():
-            details = log_entry.action_details or {}
-            if details.get("token_nonce") == nonce:
-                logger.info(f"🔁 Duplicate action token nonce {nonce} ignored")
-                language = tenant.preferred_language or "roman_urdu"
-                dup_msg = (
-                    "ℹ️ *Action Already Processed*\nThis action was already executed."
-                    if language == "english"
-                    else "ℹ️ *Pehle Hi Process Ho Chuka Hai*\nYeh action pehle hi execute ho chuka hai."
-                )
-                wa_client = WhatsAppClient()
-                try:
-                    await wa_client.send_text_message(recipient_number=sender, message_text=dup_msg)
-                finally:
-                    await wa_client.close()
-                return
+        if existing_nonce.scalars().first() is not None:
+            logger.info(f"🔁 Duplicate action token nonce {nonce} ignored")
+            language = tenant.preferred_language or "roman_urdu"
+            dup_msg = (
+                "ℹ️ *Action Already Processed*\nThis action was already executed."
+                if language == "english"
+                else "ℹ️ *Pehle Hi Process Ho Chuka Hai*\nYeh action pehle hi execute ho chuka hai."
+            )
+            wa_client = WhatsAppClient()
+            try:
+                await wa_client.send_text_message(recipient_number=sender, message_text=dup_msg)
+            finally:
+                await wa_client.close()
+            return
 
         # Resolve credentials
         meta_token = None
@@ -319,6 +328,7 @@ async def _handle_button_action(
                     },
                     executed_by="WHATSAPP_HITL",
                     executed_by_whatsapp_num=sender,
+                    token_nonce=nonce,
                 ))
                 await session.commit()
 
@@ -342,6 +352,7 @@ async def _handle_button_action(
                     },
                     executed_by="WHATSAPP_HITL",
                     executed_by_whatsapp_num=sender,
+                    token_nonce=nonce,
                 ))
                 await session.commit()
 

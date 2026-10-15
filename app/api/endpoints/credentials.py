@@ -7,18 +7,18 @@ Plaintext tokens are never persisted or returned.
 """
 
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from loguru import logger
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import encrypt_token
-from app.models.tenant import Tenant
+from app.core.security import encrypt_token, enforce_tenant_access, verify_api_key_dependency
 from app.models.credential import PlatformCredential
+from app.models.tenant import Tenant
 
 router = APIRouter()
 
@@ -48,10 +48,10 @@ class CredentialRotate(BaseModel):
 
 def _credential_to_status(cred: PlatformCredential) -> dict:
     """Serialize a credential row to a status dict (never includes plaintext)."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expires_at = cred.expires_at
     if expires_at is not None and expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
+        expires_at = expires_at.replace(tzinfo=UTC)
     days_left: int | None = None
     if expires_at is not None:
         days_left = (expires_at - now).days
@@ -82,9 +82,12 @@ async def _get_tenant_or_404(tenant_id: str, db: AsyncSession) -> Tenant:
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def register_credential(
     payload: CredentialCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
+    _auth=Depends(verify_api_key_dependency),
 ):
     """Register (or upsert) a vault credential for a tenant. Encrypts tokens at rest."""
+    enforce_tenant_access(request, payload.tenant_id)
     platform = payload.platform_name.upper()
     if platform not in VALID_PLATFORMS:
         raise HTTPException(status_code=400, detail=f"platform_name must be one of {VALID_PLATFORMS}.")
@@ -93,7 +96,7 @@ async def register_credential(
 
     expires_at = None
     if payload.expires_in_days is not None:
-        expires_at = datetime.now(timezone.utc) + timedelta(days=payload.expires_in_days)
+        expires_at = datetime.now(UTC) + timedelta(days=payload.expires_in_days)
 
     # Upsert: one ACTIVE credential per (tenant, platform)
     existing_res = await db.execute(
@@ -116,7 +119,7 @@ async def register_credential(
             existing.meta_business_id = payload.meta_business_id
         existing.expires_at = expires_at
         existing.token_status = "ACTIVE"
-        existing.last_rotated_at = datetime.now(timezone.utc)
+        existing.last_rotated_at = datetime.now(UTC)
         await db.commit()
         await db.refresh(existing)
         logger.info(f"🔁 Rotated existing {platform} credential for tenant {tenant.id}")
@@ -142,7 +145,9 @@ async def register_credential(
 async def rotate_credential(
     credential_id: str,
     payload: CredentialRotate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
+    _auth=Depends(verify_api_key_dependency),
 ):
     """Rotate an existing credential with a new token value."""
     try:
@@ -153,14 +158,15 @@ async def rotate_credential(
     cred = res.scalars().first()
     if not cred:
         raise HTTPException(status_code=404, detail=f"Credential {credential_id} not found.")
+    enforce_tenant_access(request, cred.tenant_id)
 
     cred.encrypted_access_token = encrypt_token(payload.access_token)
     if payload.refresh_token is not None:
         cred.encrypted_refresh_token = encrypt_token(payload.refresh_token)
     if payload.expires_in_days is not None:
-        cred.expires_at = datetime.now(timezone.utc) + timedelta(days=payload.expires_in_days)
+        cred.expires_at = datetime.now(UTC) + timedelta(days=payload.expires_in_days)
     cred.token_status = "ACTIVE"
-    cred.last_rotated_at = datetime.now(timezone.utc)
+    cred.last_rotated_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(cred)
     logger.info(f"🔁 Rotated credential {cred.id} ({cred.platform_name})")
@@ -169,8 +175,10 @@ async def rotate_credential(
 
 @router.get("/status")
 async def credential_status(
+    request: Request,
     tenant_id: str | None = Query(None, description="Optional tenant UUID filter"),
     db: AsyncSession = Depends(get_db),
+    _auth=Depends(verify_api_key_dependency),
 ):
     """List credential lifecycle status (no plaintext). Includes days_left."""
     query = select(PlatformCredential)

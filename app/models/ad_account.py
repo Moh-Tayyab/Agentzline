@@ -8,7 +8,7 @@ Bronze Tier: stores account config and budget ceiling only.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Boolean, Numeric, DateTime, ForeignKey, func, Uuid
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base

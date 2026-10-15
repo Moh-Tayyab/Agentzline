@@ -11,7 +11,7 @@ Computes the "Money View" for Pakistani e-commerce merchants:
 """
 
 import uuid
-from datetime import date, datetime, time, timezone
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import Any
 
@@ -217,8 +217,8 @@ async def fetch_and_compute_tenant_pnl(
             }
 
     # 3. Query orders created within the date window for this tenant
-    start_dt = datetime.combine(start_date, time.min).replace(tzinfo=timezone.utc)
-    end_dt = datetime.combine(end_date, time.max).replace(tzinfo=timezone.utc)
+    start_dt = datetime.combine(start_date, time.min).replace(tzinfo=UTC)
+    end_dt = datetime.combine(end_date, time.max).replace(tzinfo=UTC)
 
     ord_res = await session.execute(
         select(Order).where(

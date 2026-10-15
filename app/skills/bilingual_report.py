@@ -87,9 +87,9 @@ def _format_roman_urdu(
     """Format report in Roman Urdu."""
 
     lines = [
-        f"📊 *AgentZline Daily Report*",
+        "📊 *AgentZline Daily Report*",
         f"📋 {account_name} — {date_str}",
-        f"",
+        "",
         f"💰 Total Spend: *{total_spend:,.0f} PKR*",
         f"👁 Impressions: *{total_impressions:,}*",
         f"👆 Clicks: *{total_clicks:,}*",
@@ -139,9 +139,9 @@ def _format_english(
     """Format report in English."""
 
     lines = [
-        f"📊 *AgentZline Daily Report*",
+        "📊 *AgentZline Daily Report*",
         f"📋 {account_name} — {date_str}",
-        f"",
+        "",
         f"💰 Total Spend: *{total_spend:,.0f} PKR*",
         f"👁 Impressions: *{total_impressions:,}*",
         f"👆 Clicks: *{total_clicks:,}*",

@@ -3,16 +3,16 @@ Tests for Meta Ad Accounts API Endpoints (Phase-1 onboarding CRUD).
 """
 
 import uuid
-from decimal import Decimal
+from datetime import date
 from unittest.mock import AsyncMock, patch
+
 import pytest
 from httpx import AsyncClient
 
 from app.core.database import async_session_maker
-from app.models.tenant import Tenant
 from app.models.ad_account import AdAccount
 from app.models.metrics import CampaignMetricsSnapshot
-from datetime import date
+from app.models.tenant import Tenant
 
 
 @pytest.fixture

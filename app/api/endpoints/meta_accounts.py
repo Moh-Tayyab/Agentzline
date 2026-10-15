@@ -7,18 +7,21 @@ Bronze/Phase-1: Register accounts, list accounts, fetch cached metrics, trigger 
 
 import uuid
 from datetime import date, datetime
-from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from loguru import logger
+from sqlalchemy import and_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.tenant import Tenant
+from app.core.security import decrypt_token, enforce_tenant_access, verify_api_key_dependency
 from app.models.ad_account import AdAccount
+from app.models.credential import PlatformCredential
 from app.models.metrics import CampaignMetricsSnapshot
+from app.models.tenant import Tenant
 from app.schemas.meta import AdAccountCreate, AdAccountResponse
-from app.utils.meta_client import MetaGraphClient
+from app.skills.meta_normalizer import normalize_campaign_insight
+from app.utils.meta_client import MetaAPIError, MetaGraphClient
 
 router = APIRouter()
 
@@ -26,7 +29,9 @@ router = APIRouter()
 @router.post("/accounts", response_model=AdAccountResponse, status_code=status.HTTP_201_CREATED)
 async def register_ad_account(
     account_data: AdAccountCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
+    _auth=Depends(verify_api_key_dependency),
 ):
     """
     Register a new Meta ad account for monitoring and persist in database.
@@ -84,10 +89,14 @@ async def register_ad_account(
 
 @router.get("/accounts")
 async def list_ad_accounts(
+    request: Request,
     tenant_id: str | None = Query(None, description="Optional tenant UUID filter"),
     db: AsyncSession = Depends(get_db),
+    _auth=Depends(verify_api_key_dependency),
 ):
     """List all registered ad accounts from database."""
+    if tenant_id:
+        enforce_tenant_access(request, tenant_id)
     query = select(AdAccount)
     if tenant_id:
         try:
@@ -121,10 +130,6 @@ async def list_ad_accounts(
     }
 
 
-from app.skills.meta_normalizer import normalize_campaign_insight
-from app.utils.meta_client import MetaGraphClient, MetaAPIError
-
-
 async def _get_account_by_identifier(identifier: str, db: AsyncSession) -> AdAccount | None:
     """Resolve an AdAccount by either its internal UUID or external_account_id."""
     try:
@@ -140,9 +145,11 @@ async def _get_account_by_identifier(identifier: str, db: AsyncSession) -> AdAcc
 @router.get("/accounts/{account_id}/metrics")
 async def get_account_metrics(
     account_id: str,
+    request: Request,
     date_start: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
     date_end: str | None = Query(None, description="End date (YYYY-MM-DD)"),
     db: AsyncSession = Depends(get_db),
+    _auth=Depends(verify_api_key_dependency),
 ):
     """
     Fetch cached campaign metrics snapshots from the database for an ad account.
@@ -156,6 +163,7 @@ async def get_account_metrics(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Ad account {account_id} not found.",
         )
+    enforce_tenant_access(request, account.tenant_id)
 
     filters = [CampaignMetricsSnapshot.ad_account_id == account.id]
     if date_start:
@@ -201,7 +209,9 @@ async def get_account_metrics(
 @router.post("/accounts/{account_id}/sync")
 async def trigger_metrics_sync(
     account_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
+    _auth=Depends(verify_api_key_dependency),
 ):
     """
     Trigger immediate metrics pull from Meta Graph API and persist snapshots in DB.
@@ -216,8 +226,24 @@ async def trigger_metrics_sync(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Ad account {account_id} not found.",
         )
+    enforce_tenant_access(request, account.tenant_id)
 
-    client = MetaGraphClient()
+    # Resolve tenant vault META token (multi-tenant) — fallback to global env token
+    cred_res = await db.execute(
+        select(PlatformCredential).where(
+            PlatformCredential.tenant_id == account.tenant_id,
+            PlatformCredential.platform_name == "META",
+            PlatformCredential.token_status == "ACTIVE",
+        )
+    )
+    cred = cred_res.scalars().first()
+    meta_token = None
+    if cred and cred.encrypted_access_token:
+        try:
+            meta_token = decrypt_token(cred.encrypted_access_token)
+        except Exception as exc:
+            logger.warning(f"Failed to decrypt META vault token for tenant {account.tenant_id}: {exc}")
+    client = MetaGraphClient(access_token=meta_token)
     today = date.today()
     try:
         raw_insights = await client.get_account_insights(
@@ -244,22 +270,42 @@ async def trigger_metrics_sync(
         cpc = (spend / clicks) if clicks > 0 else 0.0
         cpa = (spend / conversions) if conversions > 0 else 0.0
 
-        snapshot = CampaignMetricsSnapshot(
-            ad_account_id=account.id,
-            external_campaign_id=norm["id"],
-            campaign_name=norm["name"],
-            snapshot_date=today,
-            spend=spend,
-            impressions=norm["impressions"],
-            clicks=clicks,
-            conversions=conversions,
-            roas=norm["roas"],
-            ctr=norm["ctr"],
-            cpc=cpc,
-            cpa=cpa,
-            raw_payload=insight,
+        existing_res = await db.execute(
+            select(CampaignMetricsSnapshot).where(
+                CampaignMetricsSnapshot.ad_account_id == account.id,
+                CampaignMetricsSnapshot.external_campaign_id == norm["id"],
+                CampaignMetricsSnapshot.snapshot_date == today,
+            )
         )
-        db.add(snapshot)
+        existing = existing_res.scalars().first()
+        if existing:
+            existing.campaign_name = norm["name"]
+            existing.spend = spend
+            existing.impressions = norm["impressions"]
+            existing.clicks = clicks
+            existing.conversions = conversions
+            existing.roas = norm["roas"]
+            existing.ctr = norm["ctr"]
+            existing.cpc = cpc
+            existing.cpa = cpa
+            existing.raw_payload = insight
+        else:
+            snapshot = CampaignMetricsSnapshot(
+                ad_account_id=account.id,
+                external_campaign_id=norm["id"],
+                campaign_name=norm["name"],
+                snapshot_date=today,
+                spend=spend,
+                impressions=norm["impressions"],
+                clicks=clicks,
+                conversions=conversions,
+                roas=norm["roas"],
+                ctr=norm["ctr"],
+                cpc=cpc,
+                cpa=cpa,
+                raw_payload=insight,
+            )
+            db.add(snapshot)
         saved_count += 1
 
     await db.commit()

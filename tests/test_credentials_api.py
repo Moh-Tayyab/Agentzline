@@ -3,19 +3,19 @@ Tests for Credential Vault API + Token Expiry Watchdog (Phase-1 Task #2).
 """
 
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from app.agents.scheduler import run_token_expiry_watchdog
 from app.core.database import async_session_maker
 from app.core.security import decrypt_token
-from app.models.tenant import Tenant
-from app.models.credential import PlatformCredential
 from app.models.audit_log import AuditLog
-from app.agents.scheduler import run_token_expiry_watchdog
+from app.models.credential import PlatformCredential
+from app.models.tenant import Tenant
 
 
 @pytest.fixture
@@ -135,7 +135,7 @@ async def test_watchdog_warns_expiring_token(vault_tenant):
             platform_name="META",
             encrypted_access_token=enc("expiring-token"),
             token_status="ACTIVE",
-            expires_at=datetime.now(timezone.utc) + timedelta(days=5, hours=2),
+            expires_at=datetime.now(UTC) + timedelta(days=5, hours=2),
         )
         session.add(cred)
         await session.commit()
@@ -169,7 +169,7 @@ async def test_watchdog_expires_past_due_token(vault_tenant):
             platform_name="META",
             encrypted_access_token=enc("dead-token"),
             token_status="ACTIVE",
-            expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+            expires_at=datetime.now(UTC) - timedelta(days=1),
         )
         session.add(cred)
         await session.commit()

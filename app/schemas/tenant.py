@@ -4,9 +4,10 @@ Tenant Schemas.
 Pydantic models for Agency / Tenant onboarding and management.
 """
 
-from datetime import datetime
-from pydantic import BaseModel, Field, field_validator
 import re
+from datetime import datetime
+
+from pydantic import BaseModel, Field, field_validator
 
 
 def validate_e164_phone(phone: str | None) -> str | None:

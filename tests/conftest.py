@@ -6,14 +6,14 @@ import os
 
 import pytest
 from cryptography.fernet import Fernet
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
 # Generate a valid Fernet key and sqlite database for tests (must be set before any app imports)
 os.environ.setdefault("FERNET_ENCRYPTION_KEY", Fernet.generate_key().decode())
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///file:testdb?mode=memory&cache=shared&uri=true")
 
+from app.core.database import engine, init_db
 from app.main import app  # noqa: E402
-from app.core.database import init_db, engine
 from app.models.base import Base
 
 

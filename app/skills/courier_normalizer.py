@@ -6,12 +6,9 @@ into canonical delivery lifecycles and computes real net profit accounting
 for COD returns (RTO) and courier penalties.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
-
-from loguru import logger
-
 
 CANONICAL_STATUSES = {
     "BOOKED",
@@ -224,7 +221,7 @@ def parse_postex_webhook_payload(payload: dict[str, Any]) -> dict[str, Any]:
         return_charges = Decimal("0.00")
 
     ts_raw = payload.get("transactionTimestamp") or payload.get("timestamp")
-    timestamp = datetime.now(timezone.utc)
+    timestamp = datetime.now(UTC)
     if ts_raw:
         try:
             if isinstance(ts_raw, str):
@@ -280,7 +277,7 @@ def parse_trax_webhook_payload(payload: dict[str, Any]) -> dict[str, Any]:
         return_charges = Decimal("0.00")
 
     ts_raw = payload.get("timestamp") or payload.get("date")
-    timestamp = datetime.now(timezone.utc)
+    timestamp = datetime.now(UTC)
     if ts_raw:
         try:
             if isinstance(ts_raw, str):
@@ -335,7 +332,7 @@ def parse_leopards_webhook_payload(payload: dict[str, Any]) -> dict[str, Any]:
         return_charges = Decimal("0.00")
 
     ts_raw = payload.get("activity_date") or payload.get("timestamp")
-    timestamp = datetime.now(timezone.utc)
+    timestamp = datetime.now(UTC)
     if ts_raw:
         try:
             if isinstance(ts_raw, str):
@@ -390,7 +387,7 @@ def parse_swyft_webhook_payload(payload: dict[str, Any]) -> dict[str, Any]:
         return_charges = Decimal("0.00")
 
     ts_raw = payload.get("created_at") or payload.get("timestamp")
-    timestamp = datetime.now(timezone.utc)
+    timestamp = datetime.now(UTC)
     if ts_raw:
         try:
             if isinstance(ts_raw, str):

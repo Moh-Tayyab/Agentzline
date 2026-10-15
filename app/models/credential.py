@@ -8,7 +8,7 @@ Tokens are encrypted at rest using Fernet before database storage.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Text, DateTime, ForeignKey, func, Uuid
+from sqlalchemy import DateTime, ForeignKey, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base

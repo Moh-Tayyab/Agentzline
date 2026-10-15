@@ -4,7 +4,7 @@ Pydantic Schemas for Orders, Courier Events, and Product Costs (Phase-4 Gold Tie
 
 import uuid
 from datetime import datetime
-from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -28,6 +28,8 @@ class OrderCreate(BaseModel):
     utm_medium: str | None = None
     utm_campaign: str | None = None
     fbclid: str | None = None
+    sku: str | None = None
+    quantity: int = Field(default=1, ge=1)
 
 
 class OrderResponse(BaseModel):

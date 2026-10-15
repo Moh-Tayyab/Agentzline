@@ -5,17 +5,19 @@ Ingests real-time order delivery status updates from Pakistani couriers
 (starting with PostEx MVP) and updates order fulfillment & COD reconciliation.
 """
 
+import hmac
+import uuid
 from typing import Any
-from fastapi import APIRouter, HTTPException, Request, status
+
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from loguru import logger
 from sqlalchemy import or_, select
 
+from app.core.config import get_settings
 from app.core.database import async_session_maker
 from app.models.audit_log import AuditLog
 from app.models.order import CourierEvent, Order
 from app.schemas.order import CourierWebhookResponse
-import hmac
-from app.core.config import get_settings
 from app.skills.courier_normalizer import (
     parse_leopards_webhook_payload,
     parse_postex_webhook_payload,
@@ -24,6 +26,17 @@ from app.skills.courier_normalizer import (
 )
 
 router = APIRouter()
+
+
+def _tenant_from_header(request: Request) -> uuid.UUID | None:
+    """Extract tenant UUID from X-Tenant-Id header if present."""
+    raw = request.headers.get("X-Tenant-Id") or request.headers.get("x-tenant-id")
+    if not raw:
+        return None
+    try:
+        return uuid.UUID(raw.strip())
+    except ValueError:
+        return None
 
 
 def verify_courier_webhook_secret(request: Request) -> None:
@@ -38,6 +51,12 @@ def verify_courier_webhook_secret(request: Request) -> None:
     settings = get_settings()
     configured_secret = settings.COURIER_WEBHOOK_SECRET
     if not configured_secret:
+        if settings.APP_ENV.lower() == "production":
+            logger.error("❌ COURIER_WEBHOOK_SECRET not configured in production — rejecting webhook")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Courier webhook secret not configured",
+            )
         return
 
     incoming_secret = (
@@ -70,6 +89,7 @@ async def _process_courier_lifecycle(
     courier_name: str,
     parsed: dict[str, Any],
     raw_payload: dict[str, Any],
+    tenant_id: uuid.UUID | None = None,
 ) -> CourierWebhookResponse:
     """Shared database order transition, courier event logging, and audit tracking."""
     tracking = parsed["tracking_number"]
@@ -94,10 +114,13 @@ async def _process_courier_lifecycle(
             conditions.append(Order.external_order_id == order_ref)
             conditions.append(Order.order_number == order_ref)
 
-        result = await session.execute(select(Order).where(or_(*conditions)))
-        order = result.scalars().first()
+        query = select(Order).where(or_(*conditions))
+        if tenant_id is not None:
+            query = query.where(Order.tenant_id == tenant_id)
+        result = await session.execute(query)
+        orders = result.scalars().all()
 
-        if order is None:
+        if not orders:
             logger.warning(
                 f"⚠️ Order not found for {courier_name} update (tracking: {tracking}, ref: {order_ref})"
             )
@@ -107,6 +130,25 @@ async def _process_courier_lifecycle(
                 tracking_number=tracking,
                 normalized_status=norm_status,
             )
+
+        # Tenant isolation: never mutate another brand's order when ref collides
+        if tenant_id is None and len(orders) > 1 and not tracking:
+            logger.warning(
+                f"🚨 Ambiguous order ref '{order_ref}' matches {len(orders)} tenants — tenant_id required"
+            )
+            return CourierWebhookResponse(
+                status="ambiguous_order_ref",
+                courier=courier_name,
+                tracking_number=tracking,
+                normalized_status=norm_status,
+            )
+        # Prefer exact tracking match when multiple rows match
+        order = orders[0]
+        if len(orders) > 1 and tracking:
+            for candidate in orders:
+                if candidate.tracking_number == tracking:
+                    order = candidate
+                    break
 
         if tracking and not order.tracking_number:
             order.tracking_number = tracking
@@ -169,53 +211,102 @@ async def _process_courier_lifecycle(
 
 
 @router.post("/webhook/postex", response_model=CourierWebhookResponse, status_code=status.HTTP_200_OK)
-async def handle_postex_webhook(request: Request) -> CourierWebhookResponse:
+async def handle_postex_webhook(request: Request, tenant_id: uuid.UUID | None = Query(default=None)) -> CourierWebhookResponse:
     """PostEx courier status webhook."""
     verify_courier_webhook_secret(request)
+    tenant_id = tenant_id or _tenant_from_header(request)
     try:
         payload = await request.json()
     except Exception as exc:
         logger.error(f"Failed parsing PostEx webhook JSON: {exc}")
         return CourierWebhookResponse(status="invalid_payload", courier="POSTEX")
     parsed = parse_postex_webhook_payload(payload)
-    return await _process_courier_lifecycle("POSTEX", parsed, payload)
+    return await _process_courier_lifecycle("POSTEX", parsed, payload, tenant_id)
 
 
 @router.post("/webhook/trax", response_model=CourierWebhookResponse, status_code=status.HTTP_200_OK)
-async def handle_trax_webhook(request: Request) -> CourierWebhookResponse:
+async def handle_trax_webhook(request: Request, tenant_id: uuid.UUID | None = Query(default=None)) -> CourierWebhookResponse:
     """Trax Logistics status webhook."""
     verify_courier_webhook_secret(request)
+    tenant_id = tenant_id or _tenant_from_header(request)
     try:
         payload = await request.json()
     except Exception as exc:
         logger.error(f"Failed parsing Trax webhook JSON: {exc}")
         return CourierWebhookResponse(status="invalid_payload", courier="TRAX")
     parsed = parse_trax_webhook_payload(payload)
-    return await _process_courier_lifecycle("TRAX", parsed, payload)
+    return await _process_courier_lifecycle("TRAX", parsed, payload, tenant_id)
 
 
 @router.post("/webhook/leopards", response_model=CourierWebhookResponse, status_code=status.HTTP_200_OK)
-async def handle_leopards_webhook(request: Request) -> CourierWebhookResponse:
+async def handle_leopards_webhook(request: Request, tenant_id: uuid.UUID | None = Query(default=None)) -> CourierWebhookResponse:
     """Leopards Courier status webhook."""
     verify_courier_webhook_secret(request)
+    tenant_id = tenant_id or _tenant_from_header(request)
     try:
         payload = await request.json()
     except Exception as exc:
         logger.error(f"Failed parsing Leopards webhook JSON: {exc}")
         return CourierWebhookResponse(status="invalid_payload", courier="LEOPARDS")
     parsed = parse_leopards_webhook_payload(payload)
-    return await _process_courier_lifecycle("LEOPARDS", parsed, payload)
+    return await _process_courier_lifecycle("LEOPARDS", parsed, payload, tenant_id)
 
 
 @router.post("/webhook/swyft", response_model=CourierWebhookResponse, status_code=status.HTTP_200_OK)
-async def handle_swyft_webhook(request: Request) -> CourierWebhookResponse:
+async def handle_swyft_webhook(request: Request, tenant_id: uuid.UUID | None = Query(default=None)) -> CourierWebhookResponse:
     """Swyft Logistics status webhook."""
     verify_courier_webhook_secret(request)
+    tenant_id = tenant_id or _tenant_from_header(request)
     try:
         payload = await request.json()
     except Exception as exc:
         logger.error(f"Failed parsing Swyft webhook JSON: {exc}")
         return CourierWebhookResponse(status="invalid_payload", courier="SWYFT")
     parsed = parse_swyft_webhook_payload(payload)
-    return await _process_courier_lifecycle("SWYFT", parsed, payload)
+    return await _process_courier_lifecycle("SWYFT", parsed, payload, tenant_id)
+
+
+# Tenant-path aliases: /webhook/{courier}/{tenant_id}
+@router.post("/webhook/postex/{tenant_id}", response_model=CourierWebhookResponse, status_code=status.HTTP_200_OK)
+async def handle_postex_webhook_tenant(request: Request, tenant_id: uuid.UUID) -> CourierWebhookResponse:
+    verify_courier_webhook_secret(request)
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        logger.error(f"Failed parsing PostEx webhook JSON: {exc}")
+        return CourierWebhookResponse(status="invalid_payload", courier="POSTEX")
+    return await _process_courier_lifecycle("POSTEX", parse_postex_webhook_payload(payload), payload, tenant_id)
+
+
+@router.post("/webhook/trax/{tenant_id}", response_model=CourierWebhookResponse, status_code=status.HTTP_200_OK)
+async def handle_trax_webhook_tenant(request: Request, tenant_id: uuid.UUID) -> CourierWebhookResponse:
+    verify_courier_webhook_secret(request)
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        logger.error(f"Failed parsing Trax webhook JSON: {exc}")
+        return CourierWebhookResponse(status="invalid_payload", courier="TRAX")
+    return await _process_courier_lifecycle("TRAX", parse_trax_webhook_payload(payload), payload, tenant_id)
+
+
+@router.post("/webhook/leopards/{tenant_id}", response_model=CourierWebhookResponse, status_code=status.HTTP_200_OK)
+async def handle_leopards_webhook_tenant(request: Request, tenant_id: uuid.UUID) -> CourierWebhookResponse:
+    verify_courier_webhook_secret(request)
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        logger.error(f"Failed parsing Leopards webhook JSON: {exc}")
+        return CourierWebhookResponse(status="invalid_payload", courier="LEOPARDS")
+    return await _process_courier_lifecycle("LEOPARDS", parse_leopards_webhook_payload(payload), payload, tenant_id)
+
+
+@router.post("/webhook/swyft/{tenant_id}", response_model=CourierWebhookResponse, status_code=status.HTTP_200_OK)
+async def handle_swyft_webhook_tenant(request: Request, tenant_id: uuid.UUID) -> CourierWebhookResponse:
+    verify_courier_webhook_secret(request)
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        logger.error(f"Failed parsing Swyft webhook JSON: {exc}")
+        return CourierWebhookResponse(status="invalid_payload", courier="SWYFT")
+    return await _process_courier_lifecycle("SWYFT", parse_swyft_webhook_payload(payload), payload, tenant_id)
 

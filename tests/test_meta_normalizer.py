@@ -3,11 +3,10 @@ Unit tests for Meta metrics normalizer skill.
 """
 
 from decimal import Decimal
-import pytest
 
 from app.skills.meta_normalizer import (
-    normalize_campaign_insight,
     normalize_and_aggregate_metrics,
+    normalize_campaign_insight,
 )
 
 

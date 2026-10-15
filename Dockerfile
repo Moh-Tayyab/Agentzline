@@ -18,6 +18,10 @@ COPY alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app
 
+# Run as non-root in production
+RUN useradd -m appuser && chown -R appuser:appuser /code
+USER appuser
+
 EXPOSE 8000
 
 # Migrate, then serve. Single replica only (APScheduler in-process).

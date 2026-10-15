@@ -11,10 +11,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
+from app.agents.scheduler import start_scheduler, stop_scheduler
+from app.api.router import api_router
 from app.core.config import get_settings
 from app.core.database import init_db
-from app.api.router import api_router
-from app.agents.scheduler import start_scheduler, stop_scheduler
 
 
 @asynccontextmanager

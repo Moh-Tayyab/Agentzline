@@ -12,14 +12,11 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
-    { name = "anthropic" },
     { name = "apscheduler" },
     { name = "asyncpg" },
     { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
-    { name = "langchain-anthropic" },
-    { name = "langchain-core" },
     { name = "langgraph" },
     { name = "loguru" },
     { name = "pydantic" },
@@ -41,19 +38,24 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
+llm = [
+    { name = "anthropic" },
+    { name = "langchain-anthropic" },
+    { name = "langchain-core" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.13.0,<2.0.0" },
-    { name = "anthropic", specifier = ">=0.30.0,<1.0.0" },
+    { name = "anthropic", marker = "extra == 'llm'", specifier = ">=0.30.0,<1.0.0" },
     { name = "apscheduler", specifier = ">=3.10.0,<4.0.0" },
     { name = "asyncpg", specifier = ">=0.29.0,<1.0.0" },
     { name = "cryptography", specifier = ">=43.0.0,<44.0.0" },
     { name = "fastapi", specifier = ">=0.115.0,<1.0.0" },
     { name = "httpx", specifier = ">=0.27.0,<1.0.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0" },
-    { name = "langchain-anthropic", specifier = ">=0.2.0,<1.0.0" },
-    { name = "langchain-core", specifier = ">=0.3.0,<1.0.0" },
+    { name = "langchain-anthropic", marker = "extra == 'llm'", specifier = ">=0.2.0,<1.0.0" },
+    { name = "langchain-core", marker = "extra == 'llm'", specifier = ">=0.3.0,<1.0.0" },
     { name = "langgraph", specifier = ">=0.2.0,<1.0.0" },
     { name = "loguru", specifier = ">=0.7.0,<1.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10.0" },
@@ -70,7 +72,7 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.0.30,<3.0.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0,<1.0.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["llm", "dev"]
 
 [[package]]
 name = "alembic"

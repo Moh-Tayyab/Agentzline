@@ -2,26 +2,27 @@
 Unit and integration tests for AgentZline Bronze Tier LangGraph workflow.
 """
 
-import pytest
-from unittest.mock import AsyncMock, patch
-from decimal import Decimal
 import uuid
+from decimal import Decimal
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from sqlalchemy import select
 
 from app.agents.graph import (
-    build_bronze_graph,
-    fetch_metrics_node,
     aggregate_metrics_node,
+    build_bronze_graph,
     detect_anomalies_node,
+    fetch_metrics_node,
     format_report_node,
     send_whatsapp_node,
 )
-from app.agents.state import BronzeAgentState
 from app.agents.scheduler import run_daily_report_job
+from app.agents.state import BronzeAgentState
 from app.core.database import async_session_maker
-from app.models.tenant import Tenant
 from app.models.ad_account import AdAccount
 from app.models.audit_log import AuditLog
-from sqlalchemy import select
+from app.models.tenant import Tenant
 
 
 @pytest.fixture

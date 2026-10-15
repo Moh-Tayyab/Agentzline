@@ -3,13 +3,14 @@ Tests for Tenant / Agency Management API Endpoints (Phase-1 Task #3).
 """
 
 import uuid
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
 from app.core.database import async_session_maker
-from app.models.tenant import Tenant
 from app.models.ad_account import AdAccount
+from app.models.tenant import Tenant
 
 
 @pytest.mark.asyncio
@@ -143,8 +144,9 @@ async def test_update_tenant(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_delete_tenant_cascade(client: AsyncClient):
     """Test tenant deletion cascades to associated ad accounts and metrics snapshots."""
-    from app.models.metrics import CampaignMetricsSnapshot
     from datetime import date
+
+    from app.models.metrics import CampaignMetricsSnapshot
 
     t_id = uuid.uuid4()
     acc_id = uuid.uuid4()

@@ -7,10 +7,9 @@ SQLAlchemy declarative base for all ORM models.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, func, Uuid, JSON
+from sqlalchemy import JSON, DateTime, Uuid, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-
 
 # Cross-compatible JSON type (PostgreSQL JSONB in production, JSON in SQLite)
 JSON_TYPE = JSON().with_variant(JSONB, "postgresql")

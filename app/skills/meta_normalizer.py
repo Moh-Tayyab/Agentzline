@@ -7,9 +7,13 @@ Extracts conversions and purchase values using an allowlist of Meta action types
 Computes blended aggregate metrics for reporting.
 """
 
-from decimal import Decimal, ROUND_HALF_UP
+from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
+
 from loguru import logger
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Allowlist of conversion actions recognized for e-commerce purchase tracking
 PURCHASE_ACTION_TYPES = {
@@ -134,3 +138,100 @@ def normalize_and_aggregate_metrics(
     )
 
     return normalized_campaigns, daily_summary
+
+
+async def persist_normalized_snapshots(
+    session: AsyncSession,
+    tenant_id: Any,
+    normalized_metrics: list[dict[str, Any]],
+    snapshot_date: date,
+    account_map: dict[str, Any] | None = None,
+) -> int:
+    """Upsert CampaignMetricsSnapshot rows for normalized Meta insights.
+
+    Each raw insight may carry `_ad_account_external_id` (tagged by
+    fetch_metrics_node). `account_map` maps external_account_id -> AdAccount DB id.
+    When account ownership is unknown, falls back to resolving active tenant
+    accounts. Upserts on (ad_account_id, external_campaign_id, snapshot_date)
+    so re-syncing the same day never multiplies ad spend.
+
+    Returns:
+        Number of snapshots upserted.
+    """
+    from app.models.ad_account import AdAccount
+    from app.models.metrics import CampaignMetricsSnapshot
+
+    if account_map is None:
+        account_map = {}
+        acc_res = await session.execute(
+            select(AdAccount).where(
+                AdAccount.tenant_id == tenant_id,
+                AdAccount.is_active.is_(True),
+            )
+        )
+        for acc in acc_res.scalars().all():
+            account_map[acc.external_account_id] = acc.id
+            account_map[str(acc.id)] = acc.id
+
+    # If only one active account, default orphan insights to it
+    default_account_id = None
+    if len({v for v in account_map.values()}) == 1:
+        default_account_id = next(iter(account_map.values()))
+
+    saved = 0
+    for norm in normalized_metrics:
+        ext_id = norm.get("_ad_account_external_id")
+        ad_account_id = account_map.get(str(ext_id)) if ext_id else None
+        if ad_account_id is None:
+            ad_account_id = default_account_id
+        if ad_account_id is None:
+            continue
+        cid = str(norm.get("id", ""))
+        if not cid:
+            continue
+        spend = float(norm.get("spend", 0) or 0)
+        clicks = int(norm.get("clicks", 0) or 0)
+        conversions = int(norm.get("conversions", 0) or 0)
+        cpc = (spend / clicks) if clicks > 0 else 0.0
+        cpa = (spend / conversions) if conversions > 0 else 0.0
+
+        existing_res = await session.execute(
+            select(CampaignMetricsSnapshot).where(
+                CampaignMetricsSnapshot.ad_account_id == ad_account_id,
+                CampaignMetricsSnapshot.external_campaign_id == cid,
+                CampaignMetricsSnapshot.snapshot_date == snapshot_date,
+            )
+        )
+        existing = existing_res.scalars().first()
+        if existing:
+            existing.campaign_name = norm.get("name")
+            existing.spend = spend
+            existing.impressions = int(norm.get("impressions", 0) or 0)
+            existing.clicks = clicks
+            existing.conversions = conversions
+            existing.roas = float(norm.get("roas", 0.0) or 0.0)
+            existing.ctr = float(norm.get("ctr", 0.0) or 0.0)
+            existing.cpc = cpc
+            existing.cpa = cpa
+            existing.raw_payload = norm.get("raw_payload")
+        else:
+            session.add(
+                CampaignMetricsSnapshot(
+                    ad_account_id=ad_account_id,
+                    external_campaign_id=cid,
+                    campaign_name=norm.get("name"),
+                    snapshot_date=snapshot_date,
+                    spend=spend,
+                    impressions=int(norm.get("impressions", 0) or 0),
+                    clicks=clicks,
+                    conversions=conversions,
+                    roas=float(norm.get("roas", 0.0) or 0.0),
+                    ctr=float(norm.get("ctr", 0.0) or 0.0),
+                    cpc=cpc,
+                    cpa=cpa,
+                    raw_payload=norm.get("raw_payload"),
+                )
+            )
+        saved += 1
+    await session.flush()
+    return saved

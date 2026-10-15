@@ -11,11 +11,8 @@ Covers:
 - Meta API error handling during mutation.
 """
 
-import hashlib
-import hmac
 import time
 import uuid
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest

@@ -45,8 +45,8 @@ async def init_db() -> None:
 
     # In development mode, auto-create tables if Alembic migrations haven't run yet
     if settings.APP_ENV == "development":
+        import app.models  # noqa: F401  # Ensure all model classes are registered on Base.metadata
         from app.models.base import Base
-        import app.models  # Ensure all model classes are registered on Base.metadata
 
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
