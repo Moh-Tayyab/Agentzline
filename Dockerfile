@@ -11,7 +11,8 @@ WORKDIR /code
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Deps first (better layer caching)
-COPY pyproject.toml uv.lock ./
+# NOTE: README.md must be present — pyproject.toml declares it as the package readme for hatchling
+COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev
 
 COPY alembic.ini ./
