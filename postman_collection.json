@@ -5,9 +5,11 @@
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
-		{ "key": "base_url", "value": "http://127.0.0.1:8001" },
+		{ "key": "base_url", "value": "http://127.0.0.1:8000" },
+		{ "key": "admin_api_key", "value": "PASTE_ADMIN_API_KEY" },
+		{ "key": "tenant_api_key", "value": "" },
 		{ "key": "tenant_id", "value": "" },
-		{ "key": "courier_secret", "value": "local-test-secret-999" }
+		{ "key": "courier_secret", "value": "PASTE_COURIER_WEBHOOK_SECRET" }
 	],
 	"item": [
 		{
@@ -18,7 +20,10 @@
 			"name": "1 Create tenant",
 			"request": {
 				"method": "POST",
-				"header": [{ "key": "Content-Type", "value": "application/json" }],
+				"header": [
+					{ "key": "Content-Type", "value": "application/json" },
+					{ "key": "X-API-Key", "value": "{{admin_api_key}}" }
+				],
 				"body": {
 					"mode": "raw",
 					"raw": "{\n  \"company_name\": \"Gul Ahmed Fabrics PK\",\n  \"preferred_language\": \"roman_urdu\",\n  \"whatsapp_notification_number\": \"+923001234567\"\n}"
@@ -32,7 +37,10 @@
 						"exec": [
 							"pm.test('201 created', () => pm.response.to.have.status(201));",
 							"const j = pm.response.json();",
-							"pm.collectionVariables.set('tenant_id', j.id);"
+							"pm.collectionVariables.set('tenant_id', j.id);",
+							"if (j.api_key) {",
+							"  pm.collectionVariables.set('tenant_api_key', j.api_key);",
+							"}"
 						]
 					}
 				}
@@ -42,7 +50,10 @@
 			"name": "2 Register META credential",
 			"request": {
 				"method": "POST",
-				"header": [{ "key": "Content-Type", "value": "application/json" }],
+				"header": [
+					{ "key": "Content-Type", "value": "application/json" },
+					{ "key": "X-API-Key", "value": "{{tenant_api_key}}" }
+				],
 				"body": {
 					"mode": "raw",
 					"raw": "{\n  \"tenant_id\": \"{{tenant_id}}\",\n  \"platform_name\": \"META\",\n  \"access_token\": \"PASTE_META_SYSTEM_USER_TOKEN\",\n  \"expires_in_days\": 60\n}"
@@ -68,7 +79,10 @@
 			"name": "3a Create order 001",
 			"request": {
 				"method": "POST",
-				"header": [{ "key": "Content-Type", "value": "application/json" }],
+				"header": [
+					{ "key": "Content-Type", "value": "application/json" },
+					{ "key": "X-API-Key", "value": "{{tenant_api_key}}" }
+				],
 				"body": {
 					"mode": "raw",
 					"raw": "{\n  \"tenant_id\": \"{{tenant_id}}\",\n  \"external_order_id\": \"ORD-LOCAL-001\",\n  \"tracking_number\": \"PE-TRACK-101\",\n  \"courier_name\": \"POSTEX\",\n  \"campaign_id\": \"c_summer_lawn\",\n  \"total_amount_pkr\": 5000,\n  \"cogs_amount_pkr\": 2000,\n  \"courier_fee_pkr\": 250\n}"
@@ -80,7 +94,10 @@
 			"name": "3b Create order 002",
 			"request": {
 				"method": "POST",
-				"header": [{ "key": "Content-Type", "value": "application/json" }],
+				"header": [
+					{ "key": "Content-Type", "value": "application/json" },
+					{ "key": "X-API-Key", "value": "{{tenant_api_key}}" }
+				],
 				"body": {
 					"mode": "raw",
 					"raw": "{\n  \"tenant_id\": \"{{tenant_id}}\",\n  \"external_order_id\": \"ORD-LOCAL-002\",\n  \"tracking_number\": \"PE-TRACK-102\",\n  \"courier_name\": \"POSTEX\",\n  \"campaign_id\": \"c_summer_lawn\",\n  \"total_amount_pkr\": 5000,\n  \"cogs_amount_pkr\": 2000,\n  \"courier_fee_pkr\": 250\n}"
@@ -140,6 +157,9 @@
 			"name": "5 Campaign P&L",
 			"request": {
 				"method": "GET",
+				"header": [
+					{ "key": "X-API-Key", "value": "{{tenant_api_key}}" }
+				],
 				"url": "{{base_url}}/api/v1/orders/pnl?tenant_id={{tenant_id}}&date_start=2026-10-01&date_end=2026-10-13"
 			},
 			"event": [

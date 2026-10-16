@@ -43,14 +43,14 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.execute(text("SELECT 1"))
 
-    # In development mode, auto-create tables if Alembic migrations haven't run yet
-    if settings.APP_ENV == "development":
+    # In development/test mode or sqlite, auto-create tables if Alembic migrations haven't run yet
+    if settings.APP_ENV in ("development", "test") or "sqlite" in settings.DATABASE_URL:
         import app.models  # noqa: F401  # Ensure all model classes are registered on Base.metadata
         from app.models.base import Base
 
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-        logger.info("✅ Database tables verified/created in development mode")
+        logger.info("✅ Database tables verified/created in development/test mode")
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

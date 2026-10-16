@@ -9,12 +9,20 @@ from cryptography.fernet import Fernet
 from httpx import ASGITransport, AsyncClient
 
 # Generate a valid Fernet key and sqlite database for tests (must be set before any app imports)
+os.environ["APP_ENV"] = "test"
+os.environ["ADMIN_API_KEY"] = ""
+os.environ["COURIER_WEBHOOK_SECRET"] = ""
+os.environ["META_APP_SECRET"] = ""
 os.environ.setdefault("FERNET_ENCRYPTION_KEY", Fernet.generate_key().decode())
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///file:testdb?mode=memory&cache=shared&uri=true")
 
-from app.core.database import engine, init_db
+from app.core.config import get_settings  # noqa: E402
+
+get_settings.cache_clear()
+
+from app.core.database import engine, init_db  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models.base import Base
+from app.models.base import Base  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
