@@ -181,6 +181,8 @@ async def credential_status(
     _auth=Depends(verify_api_key_dependency),
 ):
     """List credential lifecycle status (no plaintext). Includes days_left."""
+    if tenant_id:
+        enforce_tenant_access(request, tenant_id)
     query = select(PlatformCredential)
     if tenant_id:
         try:

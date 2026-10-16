@@ -36,6 +36,7 @@ async def register_ad_account(
     """
     Register a new Meta ad account for monitoring and persist in database.
     """
+    enforce_tenant_access(request, account_data.tenant_id)
     logger.info(f"📋 Registering ad account: {account_data.external_account_id} for tenant: {account_data.tenant_id}")
 
     # Validate tenant UUID

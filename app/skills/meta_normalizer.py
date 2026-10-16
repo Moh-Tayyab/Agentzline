@@ -180,7 +180,9 @@ async def persist_normalized_snapshots(
 
     saved = 0
     for norm in normalized_metrics:
-        ext_id = norm.get("_ad_account_external_id")
+        ext_id = norm.get("_ad_account_external_id") or (norm.get("raw_payload") or {}).get(
+            "_ad_account_external_id"
+        )
         ad_account_id = account_map.get(str(ext_id)) if ext_id else None
         if ad_account_id is None:
             ad_account_id = default_account_id
